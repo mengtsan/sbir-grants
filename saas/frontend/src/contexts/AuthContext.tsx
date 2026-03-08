@@ -41,13 +41,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const login = () => {
-        // Redirect to backend Google OAuth flow
-        window.location.href = `${API_BASE}/auth/google/login`;
+        // Always start from the frontend login page so Turnstile precheck runs first.
+        window.location.href = '/login';
     };
 
     const logout = () => {
-        // Redirect to backend logout URL, which clears the cookie
-        window.location.href = `${API_BASE}/auth/logout`;
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = `${API_BASE}/auth/logout`;
+        form.style.display = 'none';
+        document.body.appendChild(form);
+        form.submit();
     };
 
     return (

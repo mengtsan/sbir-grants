@@ -11,15 +11,29 @@ axios.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && error.response.status === 401) {
-      const apiBase = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8787' : 'https://sbir-api.thinkwithblack.com');
-      window.location.href = `${apiBase}/auth/google/login`;
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }
 );
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+const rootElement = document.getElementById('root')
+const marketingRoot = document.getElementById('marketing-root')
+const isStaticHomepage = window.location.pathname === '/'
+
+if (isStaticHomepage) {
+  if (rootElement) {
+    rootElement.innerHTML = ''
+  }
+} else if (rootElement) {
+  if (marketingRoot) {
+    marketingRoot.style.display = 'none'
+  }
+  createRoot(rootElement).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  )
+}

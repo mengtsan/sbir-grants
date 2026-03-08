@@ -5,7 +5,7 @@
 	"compatibility_date": "2026-02-23",
 	"routes": [
 		{
-			"pattern": "sbir-api.thinkwithblack.com/*",
+			"pattern": "sbir-api.thinkwithblack.com",
 			"custom_domain": true
 		}
 	],
@@ -25,6 +25,40 @@
 	"ai": {
 		"binding": "AI"
 	},
+	"ratelimits": [
+		{
+			"name": "AUTH_RATE_LIMITER",
+			"namespace_id": "42000",
+			"simple": {
+				"limit": 10,
+				"period": 60
+			}
+		},
+		{
+			"name": "API_RATE_LIMITER",
+			"namespace_id": "42002",
+			"simple": {
+				"limit": 120,
+				"period": 60
+			}
+		},
+		{
+			"name": "AI_RATE_LIMITER",
+			"namespace_id": "42001",
+			"simple": {
+				"limit": 30,
+				"period": 60
+			}
+		},
+		{
+			"name": "UPLOAD_RATE_LIMITER",
+			"namespace_id": "42003",
+			"simple": {
+				"limit": 6,
+				"period": 60
+			}
+		}
+	],
 	"vectorize": [
 		{
 			"binding": "VECTORIZE",
@@ -43,7 +77,11 @@
 			{
 				"queue": "sbir-doc-processing",
 				"max_batch_size": 1,
-				"max_batch_timeout": 30
+				"max_batch_timeout": 30,
+				"max_retries": 5,
+				"retry_delay": 30,
+				"max_concurrency": 4,
+				"dead_letter_queue": "sbir-doc-processing-dlq"
 			}
 		]
 	},

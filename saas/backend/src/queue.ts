@@ -1,4 +1,5 @@
 import { Bindings } from './middleware'
+import { decryptSecret } from './utils/secrets'
 
 export interface DocProcessingMessage {
     documentId: string
@@ -18,6 +19,145 @@ const SECTIONS = [
     { index: 7, name: '團隊介紹與經費規劃' },
     { index: 8, name: '結語與附件清單' },
 ]
+
+const EMBEDDING_BATCH_SIZE = 32
+const VECTORIZE_BATCH_SIZE = 900
+const D1_BATCH_SIZE = 50
+
+interface PendingChunkRecord {
+    chunkId: string
+    chunkIndex: number
+    chunkText: string
+    sectionTags: number[]
+}
+
+async function replicateChunksToDuplicates(
+    env: Bindings,
+    sourceDocumentId: string,
+    projectId: string
+) {
+    const duplicates = await env.DB.prepare(
+        `SELECT id
+         FROM documents
+         WHERE duplicate_of_document_id = ? AND extraction_status IN ('pending', 'processing')`
+    ).bind(sourceDocumentId).all<{ id: string }>()
+
+    if (!duplicates.results || duplicates.results.length === 0) return
+
+    const sourceChunks = await env.DB.prepare(
+        'SELECT chunk_index, chunk_text, section_tags FROM document_chunks WHERE document_id = ? ORDER BY chunk_index ASC'
+    ).bind(sourceDocumentId).all<{
+        chunk_index: number
+        chunk_text: string
+        section_tags: string
+    }>()
+
+    const baseChunks = sourceChunks.results || []
+    for (const duplicate of duplicates.results) {
+        if (baseChunks.length > 0) {
+            const chunkInsertStatements = baseChunks.map((chunk) =>
+                env.DB.prepare(
+                    `INSERT INTO document_chunks (id, document_id, project_id, chunk_index, chunk_text, section_tags)
+                     VALUES (?, ?, ?, ?, ?, ?)`
+                ).bind(
+                    crypto.randomUUID(),
+                    duplicate.id,
+                    projectId,
+                    chunk.chunk_index,
+                    chunk.chunk_text,
+                    chunk.section_tags
+                )
+            )
+            await env.DB.batch(chunkInsertStatements)
+        }
+
+        await env.DB.prepare(
+            "UPDATE documents SET extraction_status = 'done', extraction_error = NULL WHERE id = ?"
+        ).bind(duplicate.id).run()
+    }
+
+    console.log(`[DocQueue] Replicated ${baseChunks.length} chunks from ${sourceDocumentId} to ${duplicates.results.length} duplicate documents`)
+}
+
+async function markDuplicateFailures(
+    env: Bindings,
+    sourceDocumentId: string,
+    errorMessage: string
+) {
+    await env.DB.prepare(
+        `UPDATE documents
+         SET extraction_status = 'failed', extraction_error = ?
+         WHERE duplicate_of_document_id = ? AND extraction_status IN ('pending', 'processing')`
+    ).bind(errorMessage, sourceDocumentId).run()
+}
+
+async function embedChunkBatch(
+    env: Bindings,
+    records: PendingChunkRecord[],
+    projectId: string,
+    documentId: string
+) {
+    const vectorsToInsert: Array<{
+        id: string
+        values: number[]
+        metadata: {
+            project_id: string
+            document_id: string
+            chunk_index: number
+            chunk_text: string
+        }
+    }> = []
+
+    for (let i = 0; i < records.length; i += EMBEDDING_BATCH_SIZE) {
+        const batch = records.slice(i, i + EMBEDDING_BATCH_SIZE)
+        try {
+            const embedResponse = await env.AI.run('@cf/qwen/qwen3-embedding-0.6b', {
+                text: batch.map((record) => record.chunkText.substring(0, 512))
+            }) as any
+
+            const embeddedVectors = Array.isArray(embedResponse?.data) ? embedResponse.data : []
+            embeddedVectors.forEach((values: number[] | undefined, index: number) => {
+                const record = batch[index]
+                if (!record || !Array.isArray(values)) return
+                vectorsToInsert.push({
+                    id: record.chunkId,
+                    values,
+                    metadata: {
+                        project_id: projectId,
+                        document_id: documentId,
+                        chunk_index: record.chunkIndex,
+                        chunk_text: record.chunkText.substring(0, 1000),
+                    }
+                })
+            })
+        } catch (batchError) {
+            console.warn(`[DocQueue] Batch embedding failed for chunks ${i}-${i + batch.length - 1}, falling back to per-chunk mode`, batchError)
+            for (const record of batch) {
+                try {
+                    const embedResponse = await env.AI.run('@cf/qwen/qwen3-embedding-0.6b', {
+                        text: [record.chunkText.substring(0, 512)]
+                    }) as any
+                    const values = embedResponse?.data?.[0]
+                    if (!Array.isArray(values)) continue
+                    vectorsToInsert.push({
+                        id: record.chunkId,
+                        values,
+                        metadata: {
+                            project_id: projectId,
+                            document_id: documentId,
+                            chunk_index: record.chunkIndex,
+                            chunk_text: record.chunkText.substring(0, 1000),
+                        }
+                    })
+                } catch (singleError) {
+                    console.warn(`[DocQueue] Embedding failed for chunk ${record.chunkIndex}`, singleError)
+                }
+            }
+        }
+    }
+
+    return vectorsToInsert
+}
 
 /**
  * Queue consumer: process a single uploaded document
@@ -43,6 +183,20 @@ export async function processDocumentQueue(
                 "UPDATE documents SET extraction_status = 'processing' WHERE id = ?"
             ).bind(documentId).run()
 
+            // Clean up any previous partial run so queue retries remain idempotent.
+            const existingChunks = await env.DB.prepare(
+                'SELECT id FROM document_chunks WHERE document_id = ?'
+            ).bind(documentId).all()
+            if (existingChunks.results && existingChunks.results.length > 0) {
+                const existingChunkIds = existingChunks.results.map((row) => row.id as string)
+                try {
+                    await env.VECTORIZE.deleteByIds(existingChunkIds)
+                } catch (vectorErr) {
+                    console.warn(`[DocQueue] Failed to cleanup stale vectors for ${documentId}`, vectorErr)
+                }
+                await env.DB.prepare('DELETE FROM document_chunks WHERE document_id = ?').bind(documentId).run()
+            }
+
             // --- 1. Fetch binary from R2 ---
             const r2Object = await env.sbir_saas_bucket.get(r2Key)
             if (!r2Object) throw new Error(`R2 object not found: ${r2Key}`)
@@ -57,7 +211,8 @@ export async function processDocumentQueue(
 
             let markdown = ''
 
-            if (userKeys && userKeys.gemini_key) {
+            const geminiKey = await decryptSecret(userKeys?.gemini_key || null, env)
+            if (geminiKey) {
                 // Convert arrayBuffer to base64 safely in chunks to avoid call stack overflow
                 let binary = '';
                 const bytes = new Uint8Array(arrayBuffer);
@@ -68,7 +223,7 @@ export async function processDocumentQueue(
                 }
                 const base64Data = btoa(binary);
 
-                const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${userKeys.gemini_key}`;
+                const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`;
                 const apiRes = await fetch(geminiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -129,7 +284,7 @@ ${markdown.substring(0, 8000)}`
 
             // --- 4. For each chunk: AI classify + Embed + store ---
             const sectionList = SECTIONS.map(s => `${s.index}.${s.name}`).join('、')
-            const vectorsToInsert: any[] = []
+            const pendingChunkRecords: PendingChunkRecord[] = []
 
             for (let i = 0; i < semanticChunks.length; i++) {
                 const chunkText = semanticChunks[i].trim()
@@ -155,43 +310,40 @@ ${markdown.substring(0, 8000)}`
                     sectionTags = []
                 }
 
-                // Embedding
                 const chunkId = crypto.randomUUID()
-                try {
-                    const embedResponse = await env.AI.run('@cf/qwen/qwen3-embedding-0.6b', {
-                        text: [chunkText.substring(0, 512)]
-                    }) as any
-
-                    if (embedResponse.data?.[0]) {
-                        vectorsToInsert.push({
-                            id: chunkId,
-                            values: embedResponse.data[0],
-                            metadata: {
-                                project_id: projectId,
-                                document_id: documentId,
-                                chunk_index: i,
-                                // Bug W1 fix: was 300 chars (often mid-sentence). Vectorize metadata cap is ~4KB per key.
-                                // 1000 chars is sufficient for full context without hitting limits.
-                                chunk_text: chunkText.substring(0, 1000),
-                            }
-                        })
-                    }
-                } catch (e) {
-                    console.warn(`[DocQueue] Embedding failed for chunk ${i}`, e)
-                }
-
-                // INSERT into document_chunks
-                await env.DB.prepare(
-                    `INSERT INTO document_chunks (id, document_id, project_id, chunk_index, chunk_text, section_tags)
-                     VALUES (?, ?, ?, ?, ?, ?)`
-                ).bind(chunkId, documentId, projectId, i, chunkText, JSON.stringify(sectionTags)).run()
+                pendingChunkRecords.push({
+                    chunkId,
+                    chunkIndex: i,
+                    chunkText,
+                    sectionTags,
+                })
             }
 
-            // Batch upsert to Vectorize (Max 1000 per request)
+            if (pendingChunkRecords.length > 0) {
+                const insertStatements = pendingChunkRecords.map((record) =>
+                    env.DB.prepare(
+                        `INSERT INTO document_chunks (id, document_id, project_id, chunk_index, chunk_text, section_tags)
+                         VALUES (?, ?, ?, ?, ?, ?)`
+                    ).bind(
+                        record.chunkId,
+                        documentId,
+                        projectId,
+                        record.chunkIndex,
+                        record.chunkText,
+                        JSON.stringify(record.sectionTags)
+                    )
+                )
+
+                for (let i = 0; i < insertStatements.length; i += D1_BATCH_SIZE) {
+                    await env.DB.batch(insertStatements.slice(i, i + D1_BATCH_SIZE))
+                }
+            }
+
+            const vectorsToInsert = await embedChunkBatch(env, pendingChunkRecords, projectId, documentId)
+
             if (vectorsToInsert.length > 0) {
-                const BATCH_SIZE = 900;
-                for (let i = 0; i < vectorsToInsert.length; i += BATCH_SIZE) {
-                    const batch = vectorsToInsert.slice(i, i + BATCH_SIZE);
+                for (let i = 0; i < vectorsToInsert.length; i += VECTORIZE_BATCH_SIZE) {
+                    const batch = vectorsToInsert.slice(i, i + VECTORIZE_BATCH_SIZE);
                     await env.VECTORIZE.insert(batch);
                 }
                 console.log(`[DocQueue] Inserted ${vectorsToInsert.length} vectors into Vectorize`)
@@ -201,16 +353,34 @@ ${markdown.substring(0, 8000)}`
             await env.DB.prepare(
                 "UPDATE documents SET extraction_status = 'done' WHERE id = ?"
             ).bind(documentId).run()
+            await replicateChunksToDuplicates(env, documentId, projectId)
 
             console.log(`[DocQueue] Done: document ${documentId}, ${semanticChunks.length} chunks`)
             msg.ack()
 
         } catch (err: any) {
-            console.error(`[DocQueue] Failed for document ${documentId}:`, err.message)
+            const errorMessage = err instanceof Error ? err.message : String(err)
+            console.error(`[DocQueue] Failed for document ${documentId}:`, errorMessage)
             await env.DB.prepare(
                 "UPDATE documents SET extraction_status = 'failed', extraction_error = ? WHERE id = ?"
-            ).bind(err.message, documentId).run()
-            msg.ack() // ack to avoid infinite retry on fatal errors
+            ).bind(errorMessage, documentId).run()
+            await markDuplicateFailures(env, documentId, errorMessage)
+
+            const isFatal =
+                errorMessage.includes('Gemini API 金鑰') ||
+                errorMessage.includes('R2 object not found') ||
+                errorMessage.includes('檔案內容與副檔名不符') ||
+                errorMessage.includes('無法解析文本')
+
+            if (isFatal || msg.attempts >= 5) {
+                msg.ack()
+                continue
+            }
+
+            await env.DB.prepare(
+                "UPDATE documents SET extraction_status = 'pending' WHERE id = ?"
+            ).bind(documentId).run()
+            msg.retry({ delaySeconds: 30 })
         }
     }
 }

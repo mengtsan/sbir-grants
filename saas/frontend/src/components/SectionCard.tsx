@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Sparkles, RefreshCw, AlertCircle, Edit3, Send, X, FileEdit, Save, Check, ShieldAlert } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -53,7 +53,7 @@ export default function SectionCard({
         setStatus(initialStatus);
     }, [initialContent, initialStatus]);
 
-    const handleGenerate = async () => {
+    const handleGenerate = useCallback(async () => {
         if (generating) return;
         setGenerating(true);
         setStatus('generating');
@@ -70,7 +70,11 @@ export default function SectionCard({
             });
 
             if (!response.ok) {
-                const errorData = await response.json();
+                const errorData = await response.json().catch(() => ({}));
+                if (response.status === 403 && errorData.error === 'OUT_OF_CREDITS') {
+                    window.dispatchEvent(new CustomEvent('creditsExhausted'));
+                    throw new Error('您的免費 AI 點數已用盡');
+                }
                 throw new Error(errorData.error || 'Failed to generate section.');
             }
 
@@ -95,7 +99,7 @@ export default function SectionCard({
                             const rawChunk = line.substring(2);
                             try {
                                 fullText += JSON.parse(rawChunk);
-                            } catch (e) {
+                            } catch {
                                 fullText += rawChunk;
                             }
                             let cleanedText = fullText.replace(/\\n/g, '\n');
@@ -109,7 +113,7 @@ export default function SectionCard({
                         const rawChunk = buffer.substring(2);
                         try {
                             fullText += JSON.parse(rawChunk);
-                        } catch (e) {
+                        } catch {
                             fullText += rawChunk;
                         }
                         let cleanedText = fullText.replace(/\\n/g, '\n');
@@ -127,7 +131,7 @@ export default function SectionCard({
         } finally {
             setGenerating(false);
         }
-    };
+    }, [generating, onGenerateComplete, projectId, sectionIndex]);
 
     const handleRefine = async () => {
         if (refining || !refinePrompt.trim()) return;
@@ -146,7 +150,11 @@ export default function SectionCard({
             });
 
             if (!response.ok) {
-                const errorData = await response.json();
+                const errorData = await response.json().catch(() => ({}));
+                if (response.status === 403 && errorData.error === 'OUT_OF_CREDITS') {
+                    window.dispatchEvent(new CustomEvent('creditsExhausted'));
+                    throw new Error('您的免費 AI 點數已用盡');
+                }
                 throw new Error(errorData.error || 'Failed to refine section.');
             }
 
@@ -172,7 +180,7 @@ export default function SectionCard({
                             const rawChunk = line.substring(2);
                             try {
                                 fullText += JSON.parse(rawChunk);
-                            } catch (e) {
+                            } catch {
                                 fullText += rawChunk;
                             }
                             let cleanedText = fullText.replace(/\\n/g, '\n');
@@ -186,7 +194,7 @@ export default function SectionCard({
                         const rawChunk = buffer.substring(2);
                         try {
                             fullText += JSON.parse(rawChunk);
-                        } catch (e) {
+                        } catch {
                             fullText += rawChunk;
                         }
                         let cleanedText = fullText.replace(/\\n/g, '\n');
@@ -230,7 +238,7 @@ export default function SectionCard({
         if (onRegisterTrigger) {
             onRegisterTrigger(handleGenerate);
         }
-    }, [onRegisterTrigger]);
+    }, [handleGenerate, onRegisterTrigger]);
 
     const handleReview = async () => {
         if (reviewing || !content) return;
@@ -243,6 +251,11 @@ export default function SectionCard({
                 headers: { 'Content-Type': 'application/json' }
             });
             if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                if (response.status === 403 && errorData.error === 'OUT_OF_CREDITS') {
+                    window.dispatchEvent(new CustomEvent('creditsExhausted'));
+                    throw new Error('您的免費 AI 點數已用盡');
+                }
                 throw new Error('Failed to review section.');
             }
             const data = await response.json();

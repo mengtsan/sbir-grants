@@ -1,11 +1,19 @@
 import { Hono } from 'hono'
-import { authMiddleware, Bindings, Variables } from './middleware'
+import { authMiddleware, aiRateLimitMiddleware, Bindings, Variables } from './middleware'
 import { expandQuery } from './utils/query_expansion'
 import { maximalMarginalRelevance, MmrItem } from './utils/mmr'
+import { createOpenAI } from '@ai-sdk/openai'
+import { createAnthropic } from '@ai-sdk/anthropic'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
+import { generateText } from 'ai'
+import { getAIProvider } from './utils/ai_provider'
+import { checkAndDeductCredit } from './utils/credits'
+import { buildAiCacheKey, readAiCache, writeAiCache } from './utils/ai_request_cache'
 
 const regenerateApp = new Hono<{ Bindings: Bindings; Variables: Variables }>({ strict: false })
+const REGENERATE_CACHE_TTL_SECONDS = 60 * 30
 
-regenerateApp.post('/', authMiddleware, async (c) => {
+regenerateApp.post('/', authMiddleware, aiRateLimitMiddleware, async (c) => {
     try {
         const body = await c.req.json<{
             original_question: string
@@ -21,6 +29,28 @@ regenerateApp.post('/', authMiddleware, async (c) => {
             return c.json({ error: 'Missing required fields' }, 400)
         }
 
+        const user = c.get('user')
+        const cacheKey = await buildAiCacheKey('regenerate', user.sub, {
+            original_question,
+            original_criteria,
+            current_draft,
+            modification_prompt,
+            context,
+        })
+        const cachedResponse = await readAiCache<{ regenerated_text: string }>(c.env, cacheKey)
+        if (cachedResponse) {
+            return c.json(cachedResponse)
+        }
+
+        const { provider, apiKey } = await getAIProvider(c, user.sub)
+        try {
+            await checkAndDeductCredit(c, user.sub, provider)
+        } catch (e: any) {
+            if (e.message === 'OUT_OF_CREDITS') return c.json({ error: 'OUT_OF_CREDITS' }, 403)
+            if (e.message === 'USER_NOT_FOUND') return c.json({ error: 'User not found' }, 404)
+            return c.json({ error: 'Credit check failed' }, 500)
+        }
+
         let contextStr = context
             ? `\n[已知背景資訊]\n請在修改時參考以下使用者先前提過的資訊：\n${Object.entries(context)
                 .filter(([_, value]) => value !== undefined && value !== null && value !== '')
@@ -31,7 +61,7 @@ regenerateApp.post('/', authMiddleware, async (c) => {
         // Real Semantic RAG with Vectorize (Fixing Bug R1: Ghost Vector DB for Regenerate)
         // Extract project_id from context if available to filter vectors
         const projectId = context?.project_id;
-        if (projectId) {
+        if (projectId && provider === 'cloudflare') {
             try {
                 // Generate embedding using expanded terms
                 const expandedQueries = expandQuery(`${original_question} ${modification_prompt}`);
@@ -146,27 +176,61 @@ ${contextStr}
             { role: 'user', content: `[目前的草稿內容]\n${current_draft}\n\n[使用者的修改指令]\n${modification_prompt}` },
         ]
 
-        // Using Qwen 3 30B as requested for precise prompt following
-        const response = await c.env.AI.run('@cf/qwen/qwen3-30b-a3b-fp8', {
-            messages,
-            max_tokens: 1536,
-            temperature: 0.7, // Slightly higher temp for creative rewriting
-        })
+        let regeneratedText = ''
+        if (provider === 'cloudflare') {
+            // Using Qwen 3 30B as requested for precise prompt following
+            const response = await c.env.AI.run('@cf/qwen/qwen3-30b-a3b-fp8', {
+                messages,
+                max_tokens: 1536,
+                temperature: 0.7, // Slightly higher temp for creative rewriting
+            })
 
-        // Parse Qwen JSON format vs string format
-        const aiResult = response as any;
-        const regeneratedText = typeof aiResult?.choices?.[0]?.message?.content === 'string'
-            ? aiResult.choices[0].message.content.trim()
-            : typeof aiResult?.response === 'string'
-                ? aiResult.response.trim()
-                : '';
+            // Parse Qwen JSON format vs string format
+            const aiResult = response as any;
+            regeneratedText = typeof aiResult?.choices?.[0]?.message?.content === 'string'
+                ? aiResult.choices[0].message.content.trim()
+                : typeof aiResult?.response === 'string'
+                    ? aiResult.response.trim()
+                    : '';
+
+            if (!regeneratedText) {
+                console.error('[regenerate] Empty response from AI model', JSON.stringify(response));
+                return c.json({ error: 'Failed to generate content' }, 500)
+            }
+        } else {
+            let model: any = null
+            if (provider === 'claude') {
+                const anthropic = createAnthropic({ apiKey: apiKey! })
+                model = anthropic('claude-3-5-sonnet-latest')
+            } else if (provider === 'openai') {
+                const openai = createOpenAI({ apiKey: apiKey! })
+                model = openai('gpt-4o')
+            } else if (provider === 'gemini') {
+                const google = createGoogleGenerativeAI({ apiKey: apiKey! })
+                model = google('gemini-1.5-pro')
+            }
+            const { text } = await generateText({
+                model,
+                messages: messages as any,
+                temperature: 0.7,
+            })
+            regeneratedText = text.trim()
+        }
 
         if (!regeneratedText) {
-            console.error('[regenerate] Empty response from AI model', JSON.stringify(response));
             return c.json({ error: 'Failed to generate content' }, 500)
         }
 
-        return c.json({ regenerated_text: regeneratedText })
+        const responsePayload = { regenerated_text: regeneratedText }
+        await writeAiCache(c.env, {
+            cacheKey,
+            endpoint: 'regenerate',
+            userId: user.sub,
+            response: responsePayload,
+            ttlSeconds: REGENERATE_CACHE_TTL_SECONDS,
+        })
+
+        return c.json(responsePayload)
     } catch (err) {
         console.error('[regenerate] error:', err)
         return c.json({ error: 'Regeneration failed' }, 500)

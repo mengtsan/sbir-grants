@@ -1,10 +1,12 @@
 import { Hono } from 'hono'
-import { authMiddleware, Bindings, Variables } from './middleware'
-import { getAIProvider } from './ai'
+import { authMiddleware, aiRateLimitMiddleware, Bindings, Variables } from './middleware'
+import { getAIProvider } from './utils/ai_provider'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { generateText } from 'ai'
+import { checkAndDeductCredit } from './utils/credits'
+import { buildAiCacheKey, readAiCache, writeAiCache } from './utils/ai_request_cache'
 
 const enrichApp = new Hono<{ Bindings: Bindings; Variables: Variables }>({ strict: false })
 
@@ -28,11 +30,13 @@ interface EnrichResponse {
 import criteriaData from '../../../shared_domain/enrich_criteria.json';
 
 const ENRICHABLE_QUESTIONS: Record<string, { min_chars: number; criteria: string, expand_hint?: string }> = criteriaData.enrichable_questions as any;
+const ENRICH_CACHE_TTL_SECONDS = 60 * 30
 
-enrichApp.post('/', authMiddleware, async (c) => {
+enrichApp.post('/', authMiddleware, aiRateLimitMiddleware, async (c) => {
     try {
         const body = await c.req.json<EnrichRequest>()
         const { question_id, question_text, category, user_answer, context } = body
+        const user = c.get('user')
 
         // Only process enrichable questions
         const criteria = ENRICHABLE_QUESTIONS[question_id]
@@ -43,6 +47,18 @@ enrichApp.post('/', authMiddleware, async (c) => {
         // Quick pre-check: if the answer is very long, likely sufficient
         if (user_answer.trim().length >= criteria.min_chars * 2) {
             return c.json<EnrichResponse>({ sufficient: true })
+        }
+
+        const cacheKey = await buildAiCacheKey('enrich', user.sub, {
+            question_id,
+            question_text,
+            category,
+            user_answer,
+            context,
+        })
+        const cachedResponse = await readAiCache<EnrichResponse>(c.env, cacheKey)
+        if (cachedResponse) {
+            return c.json<EnrichResponse>(cachedResponse)
         }
 
         let contextStr = context
@@ -119,8 +135,15 @@ ${contextStr}
             { role: 'user', content: `使用者的回答：「${user_answer}」` },
         ]
 
-        const user = c.get('user')
         const { provider, apiKey } = await getAIProvider(c, user.sub)
+
+        try {
+            await checkAndDeductCredit(c, user.sub, provider)
+        } catch (e: any) {
+            if (e.message === 'OUT_OF_CREDITS') return c.json({ sufficient: false, is_question: false, explanation: '系統配額已用盡', error: 'OUT_OF_CREDITS' }, 403)
+            if (e.message === 'USER_NOT_FOUND') return c.json({ sufficient: false, error: 'User not found' }, 404)
+            return c.json({ sufficient: false, error: 'Credit check failed' }, 500)
+        }
 
         let rawText = ''
 
@@ -170,6 +193,14 @@ ${contextStr}
         if (typeof result.sufficient !== 'boolean') {
             return c.json<EnrichResponse>({ sufficient: true })
         }
+
+        await writeAiCache(c.env, {
+            cacheKey,
+            endpoint: 'enrich',
+            userId: user.sub,
+            response: result,
+            ttlSeconds: ENRICH_CACHE_TTL_SECONDS,
+        })
 
         return c.json(result)
     } catch (err) {

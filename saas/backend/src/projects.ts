@@ -1,11 +1,25 @@
 import { Hono } from 'hono'
-import { authMiddleware, Bindings, Variables } from './middleware'
+import { apiRateLimitMiddleware, authMiddleware, Bindings, Variables } from './middleware'
 import { processSemanticChunking } from './chunking';
+import { fetchCompanyLookup } from './utils/company_lookup';
 
 const projectsApp = new Hono<{ Bindings: Bindings; Variables: Variables }>({ strict: false })
 
+const safeParseProgressData = (raw: unknown): Record<string, unknown> => {
+    if (!raw) return {}
+    if (typeof raw === 'object') return raw as Record<string, unknown>
+    if (typeof raw !== 'string') return {}
+    try {
+        const parsed = JSON.parse(raw)
+        return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+    } catch {
+        return {}
+    }
+}
+
 // Apply auth middleware to all routes in this app
 projectsApp.use('*', authMiddleware)
+projectsApp.use('*', apiRateLimitMiddleware)
 
 // Get all projects for the current user
 projectsApp.get('/', async (c) => {
@@ -50,9 +64,7 @@ projectsApp.get('/:id', async (c) => {
     }
 
     // Embed them back into the project's payload for backwards compatibility with the frontend
-    const parsedData = typeof project.progress_data === 'string'
-        ? JSON.parse(project.progress_data)
-        : (project.progress_data || {});
+    const parsedData = safeParseProgressData(project.progress_data)
 
     parsedData.wizardAnswers = wizardAnswers;
     project.progress_data = JSON.stringify(parsedData);
@@ -63,7 +75,11 @@ projectsApp.get('/:id', async (c) => {
 // Create a new project
 projectsApp.post('/', async (c) => {
     const user = c.get('user')
-    const body = await c.req.json()
+    const body = await c.req.json().catch(() => null)
+
+    if (!body || typeof body !== 'object') {
+        return c.json({ error: 'Invalid request body' }, 400)
+    }
 
     if (!body.title) {
         return c.json({ error: 'Title is required' }, 400)
@@ -92,7 +108,11 @@ projectsApp.post('/', async (c) => {
 projectsApp.put('/:id', async (c) => {
     const user = c.get('user')
     const id = c.req.param('id')
-    const body = await c.req.json()
+    const body = await c.req.json().catch(() => null)
+
+    if (!body || typeof body !== 'object') {
+        return c.json({ error: 'Invalid request body' }, 400)
+    }
 
     console.log(`[PUT /projects/${id}] User:`, user.sub)
     // Fetch existing details for merging progress_data
@@ -188,9 +208,7 @@ projectsApp.put('/:id', async (c) => {
 
     if (hasProgressDataToUpdate) {
         // Atomic Deep Merge for remaining progress_data (like setupPhase, etc)
-        const existingData: Record<string, any> = typeof existing.progress_data === 'string'
-            ? JSON.parse(existing.progress_data)
-            : (existing.progress_data || {});
+        const existingData: Record<string, any> = safeParseProgressData(existing.progress_data)
 
         // Delete wizardAnswers from legacy existingData just in case to clean it up
         delete existingData.wizardAnswers;
@@ -217,25 +235,19 @@ projectsApp.put('/:id', async (c) => {
     // Background: if company_name was saved AND changed, pre-fetch g0v data and cache it
     if (shouldFetchG0v && wizardAnswers?.company_name) {
         const savedCompanyName = String(wizardAnswers.company_name);
-        const dbRef = c.env.DB
+        const env = c.env
         const projectId = id
         const fetchPromise = (async () => {
             try {
-                const g0vUrl = `https://company.g0v.ronny.tw/api/search?q=${encodeURIComponent(savedCompanyName)}&page=0`
-                const g0vResponse = await fetch(g0vUrl, {
-                    headers: { 'Accept': 'application/json', 'User-Agent': 'SBIR-Assistant/1.0' }
-                })
-                if (g0vResponse.ok) {
-                    const g0vData = await g0vResponse.json() as any
-                    await dbRef.prepare(`
+                const lookup = await fetchCompanyLookup(env, savedCompanyName)
+                await env.DB.prepare(`
                         INSERT INTO project_answers (project_id, question_id, answer_text, chunking_status, updated_at)
                         VALUES (?, 'g0v_company_data', ?, 'done', CURRENT_TIMESTAMP)
                         ON CONFLICT(project_id, question_id) DO UPDATE SET
                         answer_text = excluded.answer_text,
                         updated_at = CURRENT_TIMESTAMP
-                    `).bind(projectId, JSON.stringify(g0vData)).run()
+                    `).bind(projectId, JSON.stringify(lookup.payload)).run()
                     console.log(`[PUT /projects/${projectId}] g0v data cached for "${savedCompanyName}"`)
-                }
             } catch (e: any) {
                 console.error(`[PUT /projects/${id}] g0v pre-fetch failed:`, e.message)
             }

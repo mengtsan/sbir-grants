@@ -8,8 +8,10 @@ import extractApp from './extract'
 import enrichApp from './enrich'
 import regenerateApp from './regenerate'
 import qualityApp from './quality'
-import { authMiddleware, Bindings, Variables } from './middleware'
+import companyApp from './company'
+import { apiRateLimitMiddleware, authMiddleware, Bindings, Variables } from './middleware'
 import { processDocumentQueue, DocProcessingMessage } from './queue'
+import { encryptSecret } from './utils/secrets'
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>({ strict: false })
 
@@ -18,7 +20,7 @@ app.use('*', async (c, next) => {
   const corsMiddleware = cors({
     origin: c.env.FRONTEND_URL || 'https://sbir.thinkwithblack.com',
     allowHeaders: ['Content-Type', 'Authorization'],
-    allowMethods: ['POST', 'GET', 'OPTIONS', 'PUT', 'DELETE'],
+    allowMethods: ['POST', 'GET', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
     exposeHeaders: ['Content-Length'],
     maxAge: 600,
     credentials: true,
@@ -37,42 +39,57 @@ app.route('/api/extract', extractApp)
 app.route('/api/enrich', enrichApp)
 app.route('/api/regenerate', regenerateApp)
 app.route('/api/quality', qualityApp)
+app.route('/api/company', companyApp)
 
 // Protected routes demo
-app.get('/api/me', authMiddleware, (c) => {
+app.get('/api/me', authMiddleware, apiRateLimitMiddleware, (c) => {
   const user = c.get('user')
   return c.json({ user })
 })
 
 // User API key management (BYOK — Bring Your Own Key)
-app.get('/api/me/keys', authMiddleware, async (c) => {
+app.get('/api/me/keys', authMiddleware, apiRateLimitMiddleware, async (c) => {
   const user = c.get('user')
   const row = await c.env.DB.prepare(
-    'SELECT claude_key, openai_key, gemini_key FROM users WHERE id = ?'
-  ).bind(user.sub).first<{ claude_key: string | null, openai_key: string | null, gemini_key: string | null }>()
+    'SELECT claude_key, openai_key, gemini_key, credits FROM users WHERE id = ?'
+  ).bind(user.sub).first<{ claude_key: string | null, openai_key: string | null, gemini_key: string | null, credits: number }>()
   // Only expose whether a key is set, not the actual key value (security: keys visible only server-side)
   return c.json({
     claude_key_set: !!(row?.claude_key && row.claude_key !== 'null'),
     openai_key_set: !!(row?.openai_key && row.openai_key !== 'null'),
     gemini_key_set: !!(row?.gemini_key && row.gemini_key !== 'null'),
+    credits: row?.credits ?? 0,
   })
 })
 
-app.put('/api/me/keys', authMiddleware, async (c) => {
+app.put('/api/me/keys', authMiddleware, apiRateLimitMiddleware, async (c) => {
   const user = c.get('user')
   const body = await c.req.json<{
     claude_key?: string | null,
     openai_key?: string | null,
     gemini_key?: string | null
-  }>()
+  }>().catch(() => null)
+
+  if (!body) {
+    return c.json({ error: 'Invalid request body' }, 400)
+  }
 
   // Build dynamic update — only update fields that were explicitly provided
   const updates: string[] = []
   const params: (string | null)[] = []
 
-  if ('claude_key' in body) { updates.push('claude_key = ?'); params.push(body.claude_key || null) }
-  if ('openai_key' in body) { updates.push('openai_key = ?'); params.push(body.openai_key || null) }
-  if ('gemini_key' in body) { updates.push('gemini_key = ?'); params.push(body.gemini_key || null) }
+  if ('claude_key' in body) {
+    updates.push('claude_key = ?')
+    params.push(body.claude_key ? await encryptSecret(body.claude_key, c.env) : null)
+  }
+  if ('openai_key' in body) {
+    updates.push('openai_key = ?')
+    params.push(body.openai_key ? await encryptSecret(body.openai_key, c.env) : null)
+  }
+  if ('gemini_key' in body) {
+    updates.push('gemini_key = ?')
+    params.push(body.gemini_key ? await encryptSecret(body.gemini_key, c.env) : null)
+  }
 
   if (updates.length === 0) return c.json({ error: 'No keys provided' }, 400)
 
@@ -83,7 +100,7 @@ app.put('/api/me/keys', authMiddleware, async (c) => {
 })
 
 // Allow user to delete a specific key
-app.delete('/api/me/keys/:keyType', authMiddleware, async (c) => {
+app.delete('/api/me/keys/:keyType', authMiddleware, apiRateLimitMiddleware, async (c) => {
   const user = c.get('user')
   const keyType = c.req.param('keyType')
   const allowed = ['claude_key', 'openai_key', 'gemini_key']

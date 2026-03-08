@@ -1,17 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ChevronLeft, Upload, FileText, Trash2, Download, AlertCircle, RefreshCw, Layers, CheckSquare, Sparkles, PlayCircle, Loader2 } from 'lucide-react';
 import axios from 'axios';
-import { unified } from 'unified';
-import remarkParse from 'remark-parse';
-import remarkGfm from 'remark-gfm';
-import { toDocx } from 'mdast2docx';
-import { tablePlugin } from '@m2d/table';
-import { listPlugin } from '@m2d/list';
-import { WidthType } from 'docx';
 import AIInterviewer from '../components/AIInterviewer';
 import SectionCard from '../components/SectionCard';
-import QualityRadarChart from '../components/QualityRadarChart';
+
+const QualityRadarChart = lazy(() => import('../components/QualityRadarChart'));
 
 axios.defaults.withCredentials = true;
 const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8787/api' : 'https://sbir-api.thinkwithblack.com/api');
@@ -99,46 +93,36 @@ export default function ProjectDetails() {
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    useEffect(() => {
-        fetchProjectData();
-    }, [id]);
-
-    useEffect(() => {
-        let interval: ReturnType<typeof setInterval>;
-        if (project?.chunking_status === 'syncing') {
-            interval = setInterval(() => {
-                fetchProjectData();
-            }, 3000);
+    const parseProjectProgressData = useCallback(() => {
+        if (!project?.progress_data) return {};
+        try {
+            return typeof project.progress_data === 'string'
+                ? JSON.parse(project.progress_data)
+                : (project.progress_data || {});
+        } catch {
+            return {};
         }
-        return () => {
-            if (interval) clearInterval(interval);
-        };
-    }, [project?.chunking_status, id]);
+    }, [project]);
 
-    // Poll document extraction status while any file is pending/processing
-    useEffect(() => {
-        if (!id || !isPollingDocs) return;
-        const interval = setInterval(async () => {
-            const list = await fetchDocStatus();
-            const stillProcessing = list?.some((d: Document) =>
-                d.extraction_status === 'pending' || d.extraction_status === 'processing'
-            );
-            if (!stillProcessing) setIsPollingDocs(false);
-        }, 3000);
-        return () => clearInterval(interval);
-    }, [id, isPollingDocs]);
+    const persistChecklistData = useCallback(async (nextChecklistData: { [key: string]: boolean }) => {
+        if (!project) return;
+        const existingData = parseProjectProgressData();
+        const updatedProgressData = JSON.stringify({ ...existingData, checklists: nextChecklistData });
 
-    useEffect(() => {
-        if (id) fetchDocStatus();
-    }, [id]);
+        await axios.put(`${API_BASE}/projects/${id}`, {
+            progress_data: updatedProgressData
+        });
 
-    const fetchDocStatus = async () => {
+        setProject(prev => prev ? { ...prev, progress_data: updatedProgressData } : prev);
+    }, [id, parseProjectProgressData, project]);
+
+    const fetchDocStatus = useCallback(async () => {
         try {
             const { data } = await axios.get(`${API_BASE}/storage/project/${id}/status`);
             setDocStatusList(data);
             return data;
         } catch { return []; }
-    };
+    }, [id]);
 
     const fetchDocChunks = async (docId: string) => {
         if (docChunks[docId]) return; // already loaded
@@ -171,7 +155,7 @@ export default function ProjectDetails() {
         4: '可行性評估', 5: '市場分析', 6: '預期營收', 7: '團隊與經費'
     };
 
-    const fetchProjectData = async () => {
+    const fetchProjectData = useCallback(async () => {
         try {
             const [projRes, docsRes, sectionsRes] = await Promise.all([
                 axios.get(`${API_BASE}/projects/${id}`),
@@ -186,27 +170,53 @@ export default function ProjectDetails() {
                     // Checklist data is stored under `checklists` key
                     setChecklistData(parsed.checklists || {});
                 }
-            } catch (e) { /* ignore parse error */ }
+            } catch { /* ignore parse error */ }
         } catch (e) {
             console.error('Failed to fetch project data', e);
         } finally {
             setLoading(false);
         }
-    };
+    }, [id]);
+
+    useEffect(() => {
+        fetchProjectData();
+    }, [fetchProjectData]);
+
+    useEffect(() => {
+        let interval: ReturnType<typeof setInterval>;
+        if (project?.chunking_status === 'syncing') {
+            interval = setInterval(() => {
+                fetchProjectData();
+            }, 3000);
+        }
+        return () => {
+            if (interval) clearInterval(interval);
+        };
+    }, [fetchProjectData, project?.chunking_status]);
+
+    // Poll document extraction status while any file is pending/processing
+    useEffect(() => {
+        if (!id || !isPollingDocs) return;
+        const interval = setInterval(async () => {
+            const list = await fetchDocStatus();
+            const stillProcessing = list?.some((d: Document) =>
+                d.extraction_status === 'pending' || d.extraction_status === 'processing'
+            );
+            if (!stillProcessing) setIsPollingDocs(false);
+        }, 3000);
+        return () => clearInterval(interval);
+    }, [fetchDocStatus, id, isPollingDocs]);
+
+    useEffect(() => {
+        if (id) fetchDocStatus();
+    }, [fetchDocStatus, id]);
 
     const handleChecklistChange = async (key: string, checked: boolean) => {
         const newData = { ...checklistData, [key]: checked };
         setChecklistData(newData);
         setSavingProgress(true);
         try {
-            // Merge into existing progress_data, only update the `checklists` key
-            const projRes = await axios.get(`${API_BASE}/projects/${id}`);
-            const existingData = (() => {
-                try { return JSON.parse(projRes.data.progress_data || '{}'); } catch { return {}; }
-            })();
-            await axios.put(`${API_BASE}/projects/${id}`, {
-                progress_data: JSON.stringify({ ...existingData, checklists: newData })
-            });
+            await persistChecklistData(newData);
         } catch (e) {
             console.error('Failed to save progress', e);
         } finally {
@@ -300,14 +310,7 @@ export default function ProjectDetails() {
             setChecklistData(newData);
             if (reasons) setAiQualityReasons(reasons);
 
-            // Persist to DB (merge into existing progress_data)
-            const projRes = await axios.get(`${API_BASE}/projects/${id}`);
-            const existingData = (() => {
-                try { return JSON.parse(projRes.data.progress_data || '{}'); } catch { return {}; }
-            })();
-            await axios.put(`${API_BASE}/projects/${id}`, {
-                progress_data: JSON.stringify({ ...existingData, checklists: newData })
-            });
+            await persistChecklistData(newData);
         } catch (e: any) {
             alert('AI 品質審查失敗：' + (e.response?.data?.error || e.message));
         } finally {
@@ -318,6 +321,24 @@ export default function ProjectDetails() {
     const handleExportWord = async () => {
         setExportingWord(true);
         try {
+            const [
+                { unified },
+                { default: remarkParse },
+                { default: remarkGfm },
+                { toDocx },
+                { tablePlugin },
+                { listPlugin },
+                { WidthType }
+            ] = await Promise.all([
+                import('unified'),
+                import('remark-parse'),
+                import('remark-gfm'),
+                import('mdast2docx'),
+                import('@m2d/table'),
+                import('@m2d/list'),
+                import('docx')
+            ]);
+
             // Refetch the absolute latest sections from the server first
             // because React state might only have the old chunks if the user just clicked Generate
             const res = await axios.get(`${API_BASE}/projects/${id}/sections`);
@@ -710,9 +731,7 @@ export default function ProjectDetails() {
                                                     }
                                                     const newData = { ...checklistData, ...updates };
                                                     setChecklistData(newData);
-                                                    const projRes = await axios.get(`${API_BASE}/projects/${id}`);
-                                                    const existing = (() => { try { return JSON.parse(projRes.data.progress_data || '{}'); } catch { return {}; } })();
-                                                    await axios.put(`${API_BASE}/projects/${id}`, { progress_data: JSON.stringify({ ...existing, checklists: newData }) });
+                                                    await persistChecklistData(newData);
                                                 } catch (e: any) {
                                                     alert('公司資料查詢失敗：' + (e.response?.data?.error || e.message));
                                                 } finally {
@@ -804,11 +823,13 @@ export default function ProjectDetails() {
 
                                     {qualityScorePct !== null && Object.keys(aiQualityReasons).length > 0 && (
                                         <div className="mb-6">
-                                            <QualityRadarChart
-                                                results={checklistData}
-                                                reasons={aiQualityReasons}
-                                                scorePct={qualityScorePct}
-                                            />
+                                            <Suspense fallback={<div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">載入品質圖表中...</div>}>
+                                                <QualityRadarChart
+                                                    results={checklistData}
+                                                    reasons={aiQualityReasons}
+                                                    scorePct={qualityScorePct}
+                                                />
+                                            </Suspense>
                                         </div>
                                     )}
 

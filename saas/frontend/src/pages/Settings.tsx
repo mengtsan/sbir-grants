@@ -8,6 +8,7 @@ interface KeyStatus {
     claude_key_set: boolean;
     openai_key_set: boolean;
     gemini_key_set: boolean;
+    credits?: number;
 }
 
 export default function Settings() {
@@ -108,10 +109,29 @@ export default function Settings() {
     return (
         <div className="max-w-3xl animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="mb-8">
-                <h1 className="text-2xl font-bold tracking-tight text-slate-900">API 設定</h1>
-                <p className="text-slate-500 mt-2">
-                    設定您自己的 API 金鑰 (BYOK)。如果留空，系統將使用預設的 Cloudflare Workers AI 模型。
-                </p>
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h1 className="text-2xl font-bold tracking-tight text-slate-900">API 設定</h1>
+                        <p className="text-slate-500 mt-2">
+                            設定您自己的 API 金鑰 (BYOK)。如果留空，系統將使用預設的 Cloudflare Workers AI 模型。
+                        </p>
+                    </div>
+                    {keyStatus !== null && (
+                        <div className="text-right">
+                            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1">
+                                系統免費額度
+                            </span>
+                            <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium ${(keyStatus.credits || 0) > 10
+                                    ? 'bg-emerald-100 text-emerald-800 border fill-emerald-200'
+                                    : (keyStatus.credits || 0) > 0
+                                        ? 'bg-amber-100 text-amber-800'
+                                        : 'bg-red-100 text-red-800'
+                                }`}>
+                                有效點數：{keyStatus.credits || 0} / 50 點
+                            </span>
+                        </div>
+                    )}
+                </div>
             </div>
 
             {saveSuccess && (

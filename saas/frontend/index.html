@@ -1,12 +1,617 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-Hant">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>SBIR Cloud｜AI 協作的 SBIR 提案顧問工作台</title>
+    <meta
+      name="description"
+      content="SBIR Cloud 以更專業、可控的方式協助團隊完成 SBIR 計畫書。比單看 SBIR 範本更深入，也比傳統 SBIR 代寫更能保留內容主導權與提案知識。"
+    />
+    <meta
+      name="keywords"
+      content="SBIR範本, SBIR 代寫, SBIR計畫書, SBIR範例, SBIR企劃書範本, SBIR申請, SBIR 顧問, SBIR AI"
+    />
+    <meta name="robots" content="index,follow" />
+    <meta name="theme-color" content="#111827" />
+    <link rel="canonical" href="https://sbir.thinkwithblack.com/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="zh_TW" />
+    <meta property="og:site_name" content="SBIR Cloud" />
+    <meta property="og:title" content="SBIR Cloud｜AI 協作的 SBIR 提案顧問工作台" />
+    <meta
+      property="og:description"
+      content="專為需要兼顧效率、品質與內容掌控度的團隊設計。比只看 SBIR 範本更完整，也不必完全依賴代寫。"
+    />
+    <meta property="og:url" content="https://sbir.thinkwithblack.com/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="SBIR Cloud｜AI 協作的 SBIR 提案顧問工作台" />
+    <meta
+      name="twitter:description"
+      content="以高效率、可控且更專業的方式完成 SBIR 計畫書。"
+    />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://sbir.thinkwithblack.com/#organization",
+            "name": "SBIR Cloud",
+            "url": "https://sbir.thinkwithblack.com/"
+          },
+          {
+            "@type": "Person",
+            "@id": "https://sbir.thinkwithblack.com/#designer",
+            "name": "邱煜庭",
+            "jobTitle": "SEO 與行銷專家",
+            "sameAs": [
+              "https://www.facebook.com/backtrue"
+            ]
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://sbir.thinkwithblack.com/#website",
+            "url": "https://sbir.thinkwithblack.com/",
+            "name": "SBIR Cloud",
+            "inLanguage": "zh-Hant"
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://sbir.thinkwithblack.com/#software",
+            "name": "SBIR Cloud",
+            "url": "https://sbir.thinkwithblack.com/",
+            "applicationCategory": "BusinessApplication",
+            "applicationSubCategory": "Proposal Writing SaaS",
+            "operatingSystem": "Web",
+            "inLanguage": "zh-Hant",
+            "description": "SBIR Cloud 是以 AI 協作方式完成 SBIR 計畫書的工作台，提供文件整理、章節生成、品質檢查與專案管理流程。",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "TWD"
+            },
+            "publisher": {
+              "@id": "https://sbir.thinkwithblack.com/#organization"
+            },
+            "creator": {
+              "@id": "https://sbir.thinkwithblack.com/#designer"
+            }
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "https://sbir.thinkwithblack.com/#faq",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "SBIR Cloud 和直接參考 SBIR 範本有什麼不同？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "SBIR 範本提供的是格式與章節參考，但真正提案仍需要整理資料、撰寫內容、反覆修改與檢查品質。SBIR Cloud 將這些流程整合成更可持續操作的 AI 協作工作台。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "SBIR Cloud 適合哪些類型的團隊？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "特別適合第一次申請 SBIR 的中小企業、需要快速整理提案內容的行政或企劃人員，以及希望兼顧效率、品質與內容主導權的顧問團隊。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "如果過去習慣找 SBIR 代寫，SBIR Cloud 的差別是什麼？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "SBIR Cloud 的重點不是完全取代人的判斷，而是用 AI 協助整理、起草與修改，讓團隊在保留主導權的前提下，更有效率地完成提案。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "SBIR Cloud 會協助哪些實際工作？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "你可以在同一個工作台中建立專案、整理文件、生成章節、補強市場與技術敘述、檢查內容品質，並持續管理版本與後續修改。"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "SBIR Cloud 是否能幫助降低寫案成本與時間？",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "對多數需要自行撰寫或反覆修改的團隊來說，SBIR Cloud 能明顯縮短整理與起草時間，也可降低完全依賴外部代寫帶來的溝通與修改成本。"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
+    <style>
+      :root {
+        --ink: #111827;
+        --muted: #4b5563;
+        --soft: #6b7280;
+        --line: rgba(17, 24, 39, 0.12);
+        --paper: #ffffff;
+        --canvas: #f3f4f6;
+        --brand: #0f3d33;
+        --brand-soft: #e8f0ed;
+        --accent: #9a7b4f;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", "Noto Serif TC", "PingFang TC", serif;
+        color: var(--ink);
+        background:
+          linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(243,244,246,0.98) 100%),
+          radial-gradient(circle at top left, rgba(154,123,79,0.08), transparent 28rem);
+      }
+
+      a { color: inherit; text-decoration: none; }
+
+      .page {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .container {
+        width: min(1100px, calc(100% - 2rem));
+        margin: 0 auto;
+      }
+
+      .nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1.3rem 0;
+      }
+
+      .brand-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 0.18rem;
+      }
+
+      .brand {
+        font-size: 1.1rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+
+      .brand-sub {
+        font-size: 0.82rem;
+        color: var(--soft);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .nav-actions,
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+      }
+
+      .button,
+      .button-secondary {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.75rem 1.15rem;
+        border-radius: 999px;
+        font-family: "Noto Sans TC", "PingFang TC", sans-serif;
+        font-size: 0.95rem;
+        font-weight: 700;
+      }
+
+      .button {
+        background: var(--brand);
+        color: #fff;
+        box-shadow: 0 14px 28px rgba(15, 61, 51, 0.16);
+      }
+
+      .button-secondary {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.88);
+      }
+
+      .hero {
+        padding: 3.2rem 0 2rem;
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
+        gap: 1.25rem;
+      }
+
+      .panel,
+      .card,
+      .faq-item {
+        background: rgba(255,255,255,0.88);
+        border: 1px solid var(--line);
+        border-radius: 1.1rem;
+        backdrop-filter: blur(10px);
+      }
+
+      .hero-main {
+        padding: 2rem;
+      }
+
+      .hero-side {
+        padding: 1.5rem;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.42rem 0.72rem;
+        border-radius: 999px;
+        background: var(--brand-soft);
+        color: var(--brand);
+        font-family: "Noto Sans TC", "PingFang TC", sans-serif;
+        font-size: 0.82rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+      }
+
+      h1 {
+        margin: 1rem 0 1rem;
+        font-size: clamp(2.3rem, 5vw, 4.35rem);
+        line-height: 1.02;
+        letter-spacing: -0.04em;
+        font-weight: 700;
+      }
+
+      h2 {
+        margin: 0 0 0.85rem;
+        font-size: 1.45rem;
+        line-height: 1.2;
+      }
+
+      h3 {
+        margin: 0 0 0.5rem;
+        font-size: 1rem;
+        line-height: 1.4;
+      }
+
+      p,
+      li {
+        color: var(--muted);
+        line-height: 1.86;
+        font-size: 0.98rem;
+      }
+
+      strong { color: var(--ink); }
+
+      .lead {
+        margin: 0 0 1rem;
+        font-size: 1.04rem;
+      }
+
+      .summary {
+        margin-top: 1.25rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--line);
+        font-family: "Noto Sans TC", "PingFang TC", sans-serif;
+        font-size: 0.92rem;
+        color: var(--soft);
+      }
+
+      .summary a,
+      .footer a {
+        color: var(--brand);
+        text-decoration: underline;
+        text-underline-offset: 0.16em;
+      }
+
+      .section {
+        padding: 1rem 0;
+      }
+
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+        gap: 1rem;
+        align-items: start;
+        margin-bottom: 1rem;
+      }
+
+      .section-kicker {
+        font-family: "Noto Sans TC", "PingFang TC", sans-serif;
+        color: var(--accent);
+        font-size: 0.82rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        font-weight: 800;
+      }
+
+      .grid-3,
+      .grid-2 {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+      .card { padding: 1.3rem; }
+
+      .tag-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+        margin-top: 0.85rem;
+      }
+
+      .tag {
+        padding: 0.42rem 0.7rem;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255,255,255,0.88);
+        font-family: "Noto Sans TC", "PingFang TC", sans-serif;
+        font-size: 0.87rem;
+        color: var(--muted);
+      }
+
+      .faq-list {
+        display: grid;
+        gap: 0.85rem;
+      }
+
+      .faq-item { padding: 1.15rem 1.25rem; }
+
+      .footer {
+        margin-top: auto;
+        padding: 2rem 0;
+        border-top: 1px solid var(--line);
+        text-align: center;
+        color: var(--soft);
+        font-family: "Noto Sans TC", "PingFang TC", sans-serif;
+        font-size: 0.9rem;
+      }
+
+      @media (max-width: 960px) {
+        .hero,
+        .section-head,
+        .grid-3,
+        .grid-2 {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .nav,
+        .nav-actions,
+        .hero-actions {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        h1 {
+          font-size: clamp(2rem, 12vw, 3rem);
+        }
+      }
+    </style>
   </head>
   <body>
+    <div id="marketing-root">
+      <div class="page">
+        <header class="container nav">
+          <a class="brand-wrap" href="/">
+            <span class="brand">SBIR Cloud</span>
+            <span class="brand-sub">Proposal Advisory Workspace</span>
+          </a>
+          <div class="nav-actions">
+            <a class="button-secondary" href="/app">進入工作台</a>
+            <a class="button" href="/login">開始使用</a>
+          </div>
+        </header>
+
+        <main class="container">
+          <section class="hero">
+            <div class="panel hero-main">
+              <div class="eyebrow">AI 協作｜提案顧問工作流</div>
+              <h1>以更專業、可控的方式，完成 SBIR 計畫書。</h1>
+              <p class="lead">
+                多數團隊在搜尋 <strong>SBIR範本</strong>、<strong>SBIR範例</strong> 或 <strong>SBIR代寫</strong> 時，真正需要的並不是一份可下載的格式，或一次性的外包成稿，而是一套能兼顧效率、品質與內容主導權的提案方法。
+              </p>
+              <p class="lead">
+                SBIR Cloud 將文件整理、章節生成、內容修訂與品質檢查整合到同一個工作台中，讓團隊能在 AI 協助下更快完成初稿，也能持續將提案知識沉澱為內部能力。
+              </p>
+              <div class="hero-actions">
+                <a class="button" href="/login">使用 Google 帳號登入</a>
+                <a class="button-secondary" href="/app">查看工作台</a>
+              </div>
+              <div class="summary">
+                常見需求包含：SBIR範本、SBIR企劃書範本、SBIR代寫、SBIR計畫書寫法、SBIR申請流程與 SBIR 顧問協作流程。
+                <br />
+                本專案採 MIT 授權開源，可於
+                <a href="https://github.com/backtrue/sbir-grants" target="_blank" rel="noreferrer">GitHub</a>
+                查看原始碼。
+              </div>
+            </div>
+
+            <aside class="panel hero-side">
+              <h2>適用對象</h2>
+              <p>這是一套偏向專業顧問工作流的協作工具，適合需要長期累積提案能力的團隊。</p>
+              <ul>
+                <li>第一次申請 SBIR、需要快速理解結構與內容重點的企業</li>
+                <li>需要整合內部資料並產出正式提案的行政或企劃窗口</li>
+                <li>不想只停留在 SBIR 範本，也不希望完全依賴代寫的團隊</li>
+                <li>需要兼顧效率、品質與內容掌控度的顧問或提案單位</li>
+              </ul>
+            </aside>
+          </section>
+
+          <section class="section">
+            <div class="section-head">
+              <div>
+                <div class="section-kicker">Persona</div>
+                <h2>這群人真正想解決的，不只是寫出一份文件。</h2>
+              </div>
+              <p>他們通常從 SBIR 範本或 SBIR 代寫開始搜尋，但真正關心的是怎麼更穩定地整理資訊、建立邏輯、完成可送件的提案，並把這些能力保留在團隊內部。</p>
+            </div>
+            <div class="grid-3">
+              <article class="card">
+                <h3>第一次申請的企業負責人</h3>
+                <p>希望快速理解提案全貌，降低起步的不確定性，並找到可被信任的工作方法。</p>
+              </article>
+              <article class="card">
+                <h3>行政或企劃窗口</h3>
+                <p>需要在有限時間內整合公司資料、技術內容與市場論述，重點在效率與一致性。</p>
+              </article>
+              <article class="card">
+                <h3>曾使用代寫服務的團隊</h3>
+                <p>更在意內容主導權、修改效率與知識留存，希望找到更長期可持續的替代方案。</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-head">
+              <div>
+                <div class="section-kicker">Needs</div>
+                <h2>潛在需求分析</h2>
+              </div>
+              <p>表面上是在找範本、範例或代寫，實際上是在尋找一套能降低時間成本、溝通成本與品質波動的提案流程。</p>
+            </div>
+            <div class="grid-2">
+              <article class="card">
+                <h3>顯性需求</h3>
+                <ul>
+                  <li>理解 SBIR 計畫書結構與章節安排</li>
+                  <li>縮短從空白到初稿的時間</li>
+                  <li>降低外包與內部來回溝通的修改成本</li>
+                  <li>找到更穩定的 SBIR 寫作流程</li>
+                </ul>
+              </article>
+              <article class="card">
+                <h3>隱性需求</h3>
+                <ul>
+                  <li>保留內容主導權與商業判斷</li>
+                  <li>讓提案知識沉澱在公司內部</li>
+                  <li>減少資料分散與論述不一致</li>
+                  <li>建立可重複利用的顧問級工作方法</li>
+                </ul>
+              </article>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-head">
+              <div>
+                <div class="section-kicker">Keywords</div>
+                <h2>常見搜尋切入點</h2>
+              </div>
+              <p>首頁保留必要的搜尋語意，但用更自然、專業的方式呈現，不讓頁面變成純意圖收割型 landing page。</p>
+            </div>
+            <div class="grid-3">
+              <article class="card">
+                <h3>範本類</h3>
+                <div class="tag-list">
+                  <span class="tag">SBIR範本</span>
+                  <span class="tag">SBIR 範例</span>
+                  <span class="tag">SBIR企劃書範本</span>
+                  <span class="tag">SBIR計畫書範本</span>
+                </div>
+              </article>
+              <article class="card">
+                <h3>代寫類</h3>
+                <div class="tag-list">
+                  <span class="tag">SBIR代寫</span>
+                  <span class="tag">SBIR 計畫書代寫</span>
+                  <span class="tag">SBIR 顧問代寫</span>
+                  <span class="tag">SBIR 代寫費用</span>
+                </div>
+              </article>
+              <article class="card">
+                <h3>問題類</h3>
+                <div class="tag-list">
+                  <span class="tag">SBIR計畫書寫法</span>
+                  <span class="tag">SBIR怎麼寫</span>
+                  <span class="tag">SBIR申請流程</span>
+                  <span class="tag">SBIR AI</span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-head">
+              <div>
+                <div class="section-kicker">Solution</div>
+                <h2>SBIR Cloud 的解法</h2>
+              </div>
+              <p>不是只給格式，也不是完全把寫案外包出去，而是以更像顧問團隊的方式，把工作流留在自己手上，同時交由 AI 處理重複與耗時的部分。</p>
+            </div>
+            <div class="grid-3">
+              <article class="card">
+                <h3>建立清晰結構</h3>
+                <p>從專案建立、章節安排到資料整理，都在同一個工作台中完成，不再只是參考一份靜態範本。</p>
+              </article>
+              <article class="card">
+                <h3>提升初稿效率</h3>
+                <p>透過 AI 協助生成章節與補強內容，讓團隊把時間花在判斷與修訂，而不是從零開始重複起草。</p>
+              </article>
+              <article class="card">
+                <h3>累積內部能力</h3>
+                <p>每次申請留下來的不只是文件成果，也包含資料、決策邏輯與工作方法，能成為下一次提案的基礎。</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-head">
+              <div>
+                <div class="section-kicker">Q&A</div>
+                <h2>五個關鍵問題</h2>
+              </div>
+              <p>將最常見的疑問整理為清楚、正式的答覆，同時保留結構化資料，讓搜尋引擎與使用者都能理解這個頁面的定位。</p>
+            </div>
+            <div class="faq-list">
+              <article class="faq-item">
+                <h3>SBIR Cloud 和直接參考 SBIR 範本有什麼不同？</h3>
+                <p>SBIR 範本提供的是格式與章節參考，但真正提案仍需要整理資料、撰寫內容、反覆修改與檢查品質。SBIR Cloud 將這些流程整合成更可持續操作的 AI 協作工作台。</p>
+              </article>
+              <article class="faq-item">
+                <h3>SBIR Cloud 適合哪些類型的團隊？</h3>
+                <p>特別適合第一次申請 SBIR 的中小企業、需要快速整理提案內容的行政或企劃人員，以及希望兼顧效率、品質與內容主導權的顧問團隊。</p>
+              </article>
+              <article class="faq-item">
+                <h3>如果過去習慣找 SBIR 代寫，SBIR Cloud 的差別是什麼？</h3>
+                <p>SBIR Cloud 的重點不是完全取代人的判斷，而是用 AI 協助整理、起草與修改，讓團隊在保留主導權的前提下，更有效率地完成提案。</p>
+              </article>
+              <article class="faq-item">
+                <h3>SBIR Cloud 會協助哪些實際工作？</h3>
+                <p>你可以在同一個工作台中建立專案、整理文件、生成章節、補強市場與技術敘述、檢查內容品質，並持續管理版本與後續修改。</p>
+              </article>
+              <article class="faq-item">
+                <h3>SBIR Cloud 是否能幫助降低寫案成本與時間？</h3>
+                <p>對多數需要自行撰寫或反覆修改的團隊來說，SBIR Cloud 能明顯縮短整理與起草時間，也可降低完全依賴外部代寫帶來的溝通與修改成本。</p>
+              </article>
+            </div>
+          </section>
+        </main>
+
+        <footer class="container footer">
+          由 © 2025 煜言顧問有限公司(TW) 燈言顧問株式会社(JP) 設計
+          <br />
+          MIT 開源專案｜
+          <a href="https://github.com/backtrue/sbir-grants" target="_blank" rel="noreferrer">GitHub</a>
+          ｜由 SEO 與行銷專家
+          <a href="https://www.facebook.com/backtrue" target="_blank" rel="noreferrer">邱煜庭</a>
+          設計製作
+        </footer>
+      </div>
+    </div>
+
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

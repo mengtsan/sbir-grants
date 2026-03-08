@@ -7,9 +7,9 @@ export default function Layout() {
     const { user, logout } = useAuth();
 
     const navigation = [
-        { name: '儀表板', href: '/', icon: Home },
-        { name: '專案列表', href: '/projects', icon: FolderKanban },
-        { name: '設定', href: '/settings', icon: Settings },
+        { name: '儀表板', href: '/app', icon: Home },
+        { name: '專案列表', href: '/app/projects', icon: FolderKanban },
+        { name: '設定', href: '/app/settings', icon: Settings },
     ];
 
     return (
@@ -61,6 +61,9 @@ export default function Layout() {
                 <main className="flex-1 overflow-y-auto p-6 md:p-8 max-w-7xl mx-auto w-full">
                     <Outlet />
                 </main>
+                <footer className="border-t border-slate-200 bg-white px-6 py-4 text-center text-sm text-slate-500">
+                    由 © 2025 煜言顧問有限公司(TW) 燈言顧問株式会社(JP) 設計
+                </footer>
             </div>
         </div>
     );

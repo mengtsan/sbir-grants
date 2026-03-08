@@ -18,10 +18,23 @@ interface Question {
 }
 
 const questions: Question[] = questionsData.questions as Question[];
+const API_ROOT = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8787' : 'https://sbir-api.thinkwithblack.com');
 
 interface AIInterviewerProps {
     initialAnswers?: Record<string, any>;
     onSaveProgress: (answers: Record<string, any>) => Promise<void>;
+}
+
+interface EnrichApiResponse {
+    sufficient: boolean;
+    is_question?: boolean;
+    explanation?: string;
+    enriched_answer?: string;
+}
+
+interface ExtractApiItem {
+    question_id: string;
+    extracted_answer: string;
 }
 
 export default function AIInterviewer({ initialAnswers = {}, onSaveProgress }: AIInterviewerProps) {
@@ -52,6 +65,9 @@ export default function AIInterviewer({ initialAnswers = {}, onSaveProgress }: A
     const [isRegenerating, setIsRegenerating] = useState(false);
     const [showRegenerateInput, setShowRegenerateInput] = useState(false);
     const [regenerateInstruction, setRegenerateInstruction] = useState('');
+    const enrichCacheRef = useRef<Map<string, EnrichApiResponse>>(new Map());
+    const extractCacheRef = useRef<Map<string, ExtractApiItem[]>>(new Map());
+    const regenerateCacheRef = useRef<Map<string, string>>(new Map());
 
     // IDs of questions where AI quality check is applied
     const ENRICHABLE_IDS = new Set([
@@ -137,23 +153,24 @@ export default function AIInterviewer({ initialAnswers = {}, onSaveProgress }: A
                 setIsExtracting(true);
                 // Pass all currently collected answers as context so the AI can use facts like budget limits, team size, etc.
                 const ctx = { ...answers };
-                const enrichRes = await axios.post(
-                    `${import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8787' : 'https://sbir-api.thinkwithblack.com')}/api/enrich`,
-                    {
-                        question_id: currentQuestion.id,
-                        question_text: currentQuestion.question,
-                        category: currentQuestion.category,
-                        user_answer: inputValue,
-                        context: ctx,
-                    },
-                    { withCredentials: true }
-                );
-                const enrichData = enrichRes.data as {
-                    sufficient: boolean;
-                    is_question?: boolean;
-                    explanation?: string;
-                    enriched_answer?: string;
+                const enrichPayload = {
+                    question_id: currentQuestion.id,
+                    question_text: currentQuestion.question,
+                    category: currentQuestion.category,
+                    user_answer: inputValue,
+                    context: ctx,
                 };
+                const enrichCacheKey = JSON.stringify(enrichPayload);
+                let enrichData = enrichCacheRef.current.get(enrichCacheKey);
+                if (!enrichData) {
+                    const enrichRes = await axios.post(
+                        `${import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8787' : 'https://sbir-api.thinkwithblack.com')}/api/enrich`,
+                        enrichPayload,
+                        { withCredentials: true }
+                    );
+                    enrichData = enrichRes.data as EnrichApiResponse;
+                    enrichCacheRef.current.set(enrichCacheKey, enrichData);
+                }
 
                 if (!enrichData.sufficient && enrichData.enriched_answer) {
                     // AI thinks this answer needs more depth.
@@ -168,7 +185,12 @@ export default function AIInterviewer({ initialAnswers = {}, onSaveProgress }: A
                     setIsExtracting(false);
                     return; // Stop here — wait for user to edit and confirm
                 }
-            } catch (enrichErr) {
+            } catch (enrichErr: any) {
+                if (enrichErr.response?.status === 403 && enrichErr.response?.data?.error === 'OUT_OF_CREDITS') {
+                    window.dispatchEvent(new CustomEvent('creditsExhausted'));
+                    setIsSaving(false);
+                    return;
+                }
                 // Non-critical — continue with the user's original answer
                 console.warn('[enrich] quality check skipped:', enrichErr);
             } finally {
@@ -188,24 +210,26 @@ export default function AIInterviewer({ initialAnswers = {}, onSaveProgress }: A
         if (currentQuestion.id === 'company_name' && finalInputValue.trim()) {
             try {
                 setIsExtracting(true);
-                const res = await axios.get(`https://company.g0v.ronny.tw/api/search?q=${encodeURIComponent(finalInputValue)}`);
+                const res = await axios.get(`${API_ROOT}/api/company/search`, {
+                    params: {
+                        q: finalInputValue,
+                        project_id: projectId || undefined,
+                    },
+                    withCredentials: true,
+                });
                 if (res.data?.found > 0) {
-                    const activeCompany = res.data.data.find((c: any) => c['公司狀況'] === '核准設立' || c['現況'] === '核准設立' || c['登記現況'] === '核准設立');
+                    const activeCompany = res.data.active_company || res.data.data?.[0];
                     if (activeCompany) {
-                        const officialName = activeCompany['公司名稱'] || activeCompany['商業名稱'];
+                        const officialName = res.data.official_name || activeCompany['公司名稱'] || activeCompany['商業名稱'];
                         if (officialName && officialName !== finalInputValue) {
                             finalInputValue = officialName;
                             newlyAutoFilled.add('company_name');
                         }
 
-                        const capitalRaw = activeCompany['資本總額(元)'] || activeCompany['實收資本額(元)'] || activeCompany['資本額(元)'];
-                        if (capitalRaw) {
-                            const capitalNum = parseInt(capitalRaw.toString().replace(/,/g, ''), 10);
-                            if (!isNaN(capitalNum) && capitalNum > 0) {
-                                const capitalInTenK = Math.floor(capitalNum / 10000);
-                                newSuggestions['capital'] = capitalInTenK.toString();
-                                newlyAutoFilled.add('capital');
-                            }
+                        const capitalInTenK = res.data.capital_ten_thousands;
+                        if (capitalInTenK) {
+                            newSuggestions['capital'] = String(capitalInTenK);
+                            newlyAutoFilled.add('capital');
                         }
                     }
                 }
@@ -217,7 +241,7 @@ export default function AIInterviewer({ initialAnswers = {}, onSaveProgress }: A
         }
 
         // Start with the answer the user explicitly typed (or auto-corrected)
-        let mergedAnswers = { ...answers, [currentQuestion.id]: finalInputValue };
+        const mergedAnswers = { ...answers, [currentQuestion.id]: finalInputValue };
 
         // --- Phase 10: Dynamic Knowledge Extraction ---
         if (!editingQuestionId) {
@@ -228,12 +252,19 @@ export default function AIInterviewer({ initialAnswers = {}, onSaveProgress }: A
             if (unansweredQuestions.length > 0) {
                 try {
                     setIsExtracting(true);
-                    const extractRes = await axios.post(
-                        `${import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8787' : 'https://sbir-api.thinkwithblack.com')}/api/extract`,
-                        { user_input: finalInputValue, unanswered_questions: unansweredQuestions },
-                        { withCredentials: true }
-                    );
-                    const extracted: { question_id: string; extracted_answer: string }[] = extractRes.data?.extracted ?? [];
+                    const extractPayload = { user_input: finalInputValue, unanswered_questions: unansweredQuestions };
+                    const extractCacheKey = JSON.stringify(extractPayload);
+                    let extracted = extractCacheRef.current.get(extractCacheKey);
+                    if (!extracted) {
+                        const extractRes = await axios.post(
+                            `${import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8787' : 'https://sbir-api.thinkwithblack.com')}/api/extract`,
+                            extractPayload,
+                            { withCredentials: true }
+                        );
+                        extracted = (extractRes.data?.extracted ?? []) as ExtractApiItem[];
+                        extractCacheRef.current.set(extractCacheKey, extracted);
+                    }
+                    extracted = extracted ?? [];
                     if (extracted.length > 0) {
                         const autoFilledLabels: string[] = [];
 
@@ -250,8 +281,13 @@ export default function AIInterviewer({ initialAnswers = {}, onSaveProgress }: A
                         setAiSuggestions(newSuggestions);
                         setAiAutoFilled(newlyAutoFilled);
                     }
-                } catch (extractError) {
-                    console.warn('[extract] AI extraction skipped:', extractError);
+                } catch (extractError: any) {
+                    if (extractError.response?.status === 403 && extractError.response?.data?.error === 'OUT_OF_CREDITS') {
+                        window.dispatchEvent(new CustomEvent('creditsExhausted'));
+                        console.warn('[extract] skipped due to OUT_OF_CREDITS');
+                    } else {
+                        console.warn('[extract] AI extraction skipped:', extractError);
+                    }
                 } finally {
                     setIsExtracting(false);
                 }
@@ -306,20 +342,28 @@ export default function AIInterviewer({ initialAnswers = {}, onSaveProgress }: A
 
         setIsRegenerating(true);
         try {
-            const res = await axios.post(
-                `${import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8787' : 'https://sbir-api.thinkwithblack.com')}/api/regenerate`,
-                {
-                    original_question: currentQuestion.question,
-                    original_criteria: currentQuestion.validation?.criteria, // Assuming criteria is under validation
-                    current_draft: inputValue,
-                    modification_prompt: instructionToUse,
-                    context: { ...answers, project_id: projectId }
-                },
-                { withCredentials: true }
-            );
+            const regeneratePayload = {
+                original_question: currentQuestion.question,
+                original_criteria: currentQuestion.validation?.criteria,
+                current_draft: inputValue,
+                modification_prompt: instructionToUse,
+                context: { ...answers, project_id: projectId }
+            };
+            const regenerateCacheKey = JSON.stringify(regeneratePayload);
+            let newText = regenerateCacheRef.current.get(regenerateCacheKey);
+            if (!newText) {
+                const res = await axios.post(
+                    `${import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8787' : 'https://sbir-api.thinkwithblack.com')}/api/regenerate`,
+                    regeneratePayload,
+                    { withCredentials: true }
+                );
+                newText = res.data?.regenerated_text;
+                if (newText) {
+                    regenerateCacheRef.current.set(regenerateCacheKey, newText);
+                }
+            }
 
-            if (res.data?.regenerated_text) {
-                const newText = res.data.regenerated_text;
+            if (newText) {
                 setInputValue(newText);
                 setShowRegenerateInput(false);
                 setRegenerateInstruction('');
@@ -337,9 +381,13 @@ export default function AIInterviewer({ initialAnswers = {}, onSaveProgress }: A
                     console.error('[regenerate auto-save] failed:', saveErr);
                 }
             }
-        } catch (err) {
-            console.error('[regenerate] failed:', err);
-            alert('重新生成失敗，請稍後再試。');
+        } catch (err: any) {
+            if (err.response?.status === 403 && err.response?.data?.error === 'OUT_OF_CREDITS') {
+                window.dispatchEvent(new CustomEvent('creditsExhausted'));
+            } else {
+                console.error('[regenerate] failed:', err);
+                alert('重新生成失敗，請稍後再試。');
+            }
         } finally {
             setIsRegenerating(false);
         }

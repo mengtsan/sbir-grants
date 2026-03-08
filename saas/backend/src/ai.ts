@@ -1,6 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 import { Hono } from 'hono'
-import { authMiddleware, Bindings, Variables } from './middleware'
+import { authMiddleware, aiRateLimitMiddleware, Bindings, Variables } from './middleware'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
@@ -13,29 +13,16 @@ import { calculateBudget, calculateROI, formatBudgetAsMarkdown, formatROIAsMarkd
 import { expandQuery } from './utils/query_expansion'
 import { maximalMarginalRelevance, MmrItem } from './utils/mmr'
 import { LOCAL_SBIR_SUCCESS_FACTORS } from './templates/local_sbir_success_factors'
+import { getAIProvider } from './utils/ai_provider'
+import { checkAndDeductCredit, CreditError } from './utils/credits'
+import { fetchCompanyLookup } from './utils/company_lookup'
 
 const aiApp = new Hono<{ Bindings: Bindings; Variables: Variables }>({ strict: false })
 
 aiApp.use('*', authMiddleware)
+aiApp.use('*', aiRateLimitMiddleware)
 
-// Helper to determine which AI service to use based on user settings
-export async function getAIProvider(c: any, userId: string): Promise<{
-    provider: 'claude' | 'openai' | 'gemini' | 'cloudflare';
-    apiKey: string | null;
-}> {
-    // 1. Fetch user keys from DB
-    const userKeys = await c.env.DB.prepare(
-        'SELECT claude_key, openai_key, gemini_key FROM users WHERE id = ?'
-    ).bind(userId).first()
-
-    // 2. Prioritize BYOK (handle string "null" from SQLite)
-    if (userKeys?.claude_key && userKeys.claude_key !== 'null') return { provider: 'claude', apiKey: userKeys.claude_key }
-    if (userKeys?.openai_key && userKeys.openai_key !== 'null') return { provider: 'openai', apiKey: userKeys.openai_key }
-    if (userKeys?.gemini_key && userKeys.gemini_key !== 'null') return { provider: 'gemini', apiKey: userKeys.gemini_key }
-
-    // 3. Fallback to Cloudflare Workers AI
-    return { provider: 'cloudflare', apiKey: null }
-}
+// Provider imported from utils/ai_provider.ts
 
 const SYSTEM_PROMPT = `You are a Top 1% Elite SBIR Grant Consulting Partner in Taiwan (台灣頂級政府補助案輔導計畫主持人). 
 Your proposals are legendary, maintaining a remarkable 100% approval rate. You possess unparalleled business acumen, deep empathy for SMEs, and an exceptional ability to weave technical details into compelling commercial narratives.
@@ -76,6 +63,13 @@ aiApp.post('/project/:projectId/section/:sectionIndex/generate', async (c) => {
 
     // 2. Determine AI Provider
     const { provider, apiKey } = await getAIProvider(c, user.sub)
+    try {
+        await checkAndDeductCredit(c, user.sub, provider)
+    } catch (e: any) {
+        if (e.message === 'OUT_OF_CREDITS') return c.json({ error: 'OUT_OF_CREDITS' }, 403)
+        if (e.message === 'USER_NOT_FOUND') return c.json({ error: 'User not found' }, 404)
+        return c.json({ error: 'Credit check failed' }, 500)
+    }
 
     // Reconstruct answers from relational DB
     const answersRes = await c.env.DB.prepare(
@@ -131,47 +125,49 @@ aiApp.post('/project/:projectId/section/:sectionIndex/generate', async (c) => {
                 }
 
                 // 1b. Real Semantic RAG with Vectorize (Fixing Bug R1: Ghost Vector DB)
-                try {
-                    // Generate embedding for the current section's title and description to find relevant chunks
-                    const expandedQueries = expandQuery(chunkDef.title);
-                    const searchContent = `${expandedQueries.join(" ")} ${chunkDef.expert_persona_prompt || ''}`;
-                    const embedResponse = await c.env.AI.run('@cf/qwen/qwen3-embedding-0.6b', {
-                        text: [searchContent]
-                    }) as any;
+                // Avoid consuming Cloudflare AI tokens when user is on BYOK mode.
+                if (provider === 'cloudflare') {
+                    try {
+                        // Generate embedding for the current section's title and description to find relevant chunks
+                        const expandedQueries = expandQuery(chunkDef.title);
+                        const searchContent = `${expandedQueries.join(" ")} ${chunkDef.expert_persona_prompt || ''}`;
+                        const embedResponse = await c.env.AI.run('@cf/qwen/qwen3-embedding-0.6b', {
+                            text: [searchContent]
+                        }) as any;
 
-                    if (embedResponse.data && embedResponse.data[0]) {
-                        const queryVector = embedResponse.data[0];
+                        if (embedResponse.data && embedResponse.data[0]) {
+                            const queryVector = embedResponse.data[0];
 
-                        // Query Vectorize for top 30 most semantically similar chunks (increased for MMR filtering)
-                        const vectorResults = await c.env.VECTORIZE.query(queryVector, {
-                            topK: 30,
-                            filter: { project_id: projectId },
-                            returnValues: false,
-                            returnMetadata: true
-                        });
+                            // Query Vectorize for top 30 most semantically similar chunks (increased for MMR filtering)
+                            const vectorResults = await c.env.VECTORIZE.query(queryVector, {
+                                topK: 30,
+                                filter: { project_id: projectId },
+                                returnValues: false,
+                                returnMetadata: true
+                            });
 
-                        if (vectorResults.matches && vectorResults.matches.length > 0) {
-                            chunkContext += `\n[參考上傳文件與歷史問答內容 (Semantic RAG)]\n`;
+                            if (vectorResults.matches && vectorResults.matches.length > 0) {
+                                chunkContext += `\n[參考上傳文件與歷史問答內容 (Semantic RAG)]\n`;
 
-                            // Map to MMR input format
-                            const candidateItems: MmrItem[] = vectorResults.matches
-                                .filter((m: any) => m.score > 0.65 && m.metadata?.chunk_text)
-                                .map((m: any) => ({
-                                    id: m.id,
-                                    score: m.score,
-                                    text: m.metadata!.chunk_text as string,
-                                    metadata: m.metadata
-                                }));
+                                // Map to MMR input format
+                                const candidateItems: MmrItem[] = vectorResults.matches
+                                    .filter((m: any) => m.score > 0.65 && m.metadata?.chunk_text)
+                                    .map((m: any) => ({
+                                        id: m.id,
+                                        score: m.score,
+                                        text: m.metadata!.chunk_text as string,
+                                        metadata: m.metadata
+                                    }));
 
-                            // Apply Maximal Marginal Relevance to ensure text diversity
-                            const diverseItems = maximalMarginalRelevance(candidateItems, 10, 0.6);
+                                // Apply Maximal Marginal Relevance to ensure text diversity
+                                const diverseItems = maximalMarginalRelevance(candidateItems, 10, 0.6);
 
-                            let finalItems = diverseItems;
+                                let finalItems = diverseItems;
 
-                            // Apply LLM Re-ranking (Phase 4)
-                            if (diverseItems.length > 3) {
-                                try {
-                                    const rerankPrompt = `你是一個精準的文件檢索過濾器。這是一份關於「${chunkDef.title}」的計畫書章節。
+                                // Apply LLM Re-ranking (Phase 4)
+                                if (diverseItems.length > 3) {
+                                    try {
+                                        const rerankPrompt = `你是一個精準的文件檢索過濾器。這是一份關於「${chunkDef.title}」的計畫書章節。
 我們運用搜尋找出了以下 ${diverseItems.length} 個候選參考段落，但其中可能包含不相關的雜訊。
 請挑選出最相關、最適合用來撰寫此章節的段落索引（最多 5 個）。
 
@@ -181,66 +177,67 @@ ${diverseItems.map((item, idx) => `[${idx}] ${item.text.substring(0, 200).replac
 請只回傳一個 JSON Array 包含您挑選的索引數字，例如：[0, 2, 3, 5, 8]
 絕對不要輸出其他解釋文字。`;
 
-                                    const aiResult = await c.env.AI.run('@cf/qwen/qwen3-30b-a3b-fp8', {
-                                        messages: [{ role: 'user', content: rerankPrompt }],
-                                        max_tokens: 50,
-                                        temperature: 0.1
-                                    }) as any;
+                                        const aiResult = await c.env.AI.run('@cf/qwen/qwen3-30b-a3b-fp8', {
+                                            messages: [{ role: 'user', content: rerankPrompt }],
+                                            max_tokens: 50,
+                                            temperature: 0.1
+                                        }) as any;
 
-                                    const respText = aiResult?.response || aiResult?.choices?.[0]?.message?.content || "";
-                                    const match = respText.match(/\[([\d,\s]+)\]/);
-                                    if (match) {
-                                        const parsedIndices = JSON.parse(`[${match[1]}]`) as number[];
-                                        if (Array.isArray(parsedIndices) && parsedIndices.length > 0) {
-                                            finalItems = diverseItems.filter((_, idx) => parsedIndices.includes(idx));
-                                            console.log(`[RAG] LLM Reranking kept ${finalItems.length}/${diverseItems.length} items. Selected:`, parsedIndices);
+                                        const respText = aiResult?.response || aiResult?.choices?.[0]?.message?.content || "";
+                                        const match = respText.match(/\[([\d,\s]+)\]/);
+                                        if (match) {
+                                            const parsedIndices = JSON.parse(`[${match[1]}]`) as number[];
+                                            if (Array.isArray(parsedIndices) && parsedIndices.length > 0) {
+                                                finalItems = diverseItems.filter((_, idx) => parsedIndices.includes(idx));
+                                                console.log(`[RAG] LLM Reranking kept ${finalItems.length}/${diverseItems.length} items. Selected:`, parsedIndices);
+                                            }
+                                        }
+                                    } catch (e: any) {
+                                        console.warn('[RAG] LLM Reranking failed:', e.message);
+                                    }
+                                }
+
+                                // Keep at most 5 final items to conserve context window
+                                finalItems = finalItems.slice(0, 5);
+
+                                // Deduplicate texts to prevent same chunk appearing multiple times
+                                const seenTexts = new Set<string>();
+                                for (const item of finalItems) {
+                                    const text = item.text;
+                                    if (!seenTexts.has(text)) {
+                                        seenTexts.add(text);
+                                        // Include source type if available
+                                        const source = item.metadata.document_id ? "上傳文件" : "歷史問答";
+                                        chunkContext += `(${source}) ${text}\n\n`;
+
+                                        // Bug II1 Fix: Protect against Cloudflare AI context window fatal overflow
+                                        if (chunkContext.length > 15000) {
+                                            console.log("[RAG] Context reached safe limit of 15000 chars, truncating remaining chunks.");
+                                            break;
                                         }
                                     }
-                                } catch (e: any) {
-                                    console.warn('[RAG] LLM Reranking failed:', e.message);
                                 }
+                                console.log(`[RAG] Found ${seenTexts.size} highly relevant semantic chunks for section ${sectionIndex} (Filtered by MMR & LLM Reranker)`);
                             }
-
-                            // Keep at most 5 final items to conserve context window
-                            finalItems = finalItems.slice(0, 5);
-
-                            // Deduplicate texts to prevent same chunk appearing multiple times
-                            const seenTexts = new Set<string>();
-                            for (const item of finalItems) {
-                                const text = item.text;
-                                if (!seenTexts.has(text)) {
-                                    seenTexts.add(text);
-                                    // Include source type if available
-                                    const source = item.metadata.document_id ? "上傳文件" : "歷史問答";
-                                    chunkContext += `(${source}) ${text}\n\n`;
-
-                                    // Bug II1 Fix: Protect against Cloudflare AI context window fatal overflow
-                                    if (chunkContext.length > 15000) {
-                                        console.log("[RAG] Context reached safe limit of 15000 chars, truncating remaining chunks.");
-                                        break;
-                                    }
-                                }
-                            }
-                            console.log(`[RAG] Found ${seenTexts.size} highly relevant semantic chunks for section ${sectionIndex} (Filtered by MMR & LLM Reranker)`);
                         }
+                    } catch (ragErr) {
+                        console.error('[RAG] Vectorize retrieval failed, falling back:', ragErr);
+                        // Minimal fallback to DB if Vectorize is temporarily down
+                        try {
+                            const { results: fallbackChunks } = await c.env.DB.prepare(
+                                `SELECT chunk_text FROM document_chunks
+                                 WHERE project_id = ? AND section_tags LIKE ?
+                                 ORDER BY chunk_index ASC LIMIT 5`
+                            ).bind(projectId, `%${sectionIndex}%`).all() as { results: any[] }
+
+                            if (fallbackChunks && fallbackChunks.length > 0) {
+                                chunkContext += `\n[參考上傳文件內容]\n`
+                                for (const dc of fallbackChunks) {
+                                    chunkContext += `${dc.chunk_text}\n\n`
+                                }
+                            }
+                        } catch (e) { }
                     }
-                } catch (ragErr) {
-                    console.error('[RAG] Vectorize retrieval failed, falling back:', ragErr);
-                    // Minimal fallback to DB if Vectorize is temporarily down
-                    try {
-                        const { results: fallbackChunks } = await c.env.DB.prepare(
-                            `SELECT chunk_text FROM document_chunks
-                             WHERE project_id = ? AND section_tags LIKE ?
-                             ORDER BY chunk_index ASC LIMIT 5`
-                        ).bind(projectId, `%${sectionIndex}%`).all() as { results: any[] }
-
-                        if (fallbackChunks && fallbackChunks.length > 0) {
-                            chunkContext += `\n[參考上傳文件內容]\n`
-                            for (const dc of fallbackChunks) {
-                                chunkContext += `${dc.chunk_text}\n\n`
-                            }
-                        }
-                    } catch (e) { }
                 }
 
                 const expertPersona = (chunkDef as any).expert_persona_prompt || "你是頂尖顧問。";
@@ -394,7 +391,11 @@ aiApp.post('/project/:projectId/section/:sectionIndex/refine', async (c) => {
         return c.json({ error: 'Invalid section index' }, 400)
     }
 
-    const { refinePrompt, currentContent } = await c.req.json();
+    const requestBody = await c.req.json().catch(() => null);
+    if (!requestBody || typeof requestBody !== 'object') {
+        return c.json({ error: 'Invalid request body' }, 400)
+    }
+    const { refinePrompt, currentContent } = requestBody as { refinePrompt?: string; currentContent?: string };
     if (!refinePrompt || !currentContent) {
         return c.json({ error: 'Missing refine parameters' }, 400)
     }
@@ -413,6 +414,16 @@ aiApp.post('/project/:projectId/section/:sectionIndex/refine', async (c) => {
 
     // 2. Determine AI Provider
     const { provider, apiKey } = await getAIProvider(c, user.sub)
+
+    // 2.5 Credit check
+    try {
+        await checkAndDeductCredit(c, user.sub, provider)
+    } catch (e: any) {
+        if (e.message === 'OUT_OF_CREDITS') return c.json({ error: 'OUT_OF_CREDITS' }, 403)
+        if (e.message === 'USER_NOT_FOUND') return c.json({ error: 'User not found' }, 404)
+        return c.json({ error: 'Credit check failed' }, 500)
+    }
+
     const chunkDef = PHASE1_CHUNKS[sectionIndex];
 
     const stream = new ReadableStream({
@@ -621,6 +632,15 @@ ${LOCAL_SBIR_SUCCESS_FACTORS}
     try {
         const { provider, apiKey } = await getAIProvider(c, user.sub)
 
+        // Credit check
+        try {
+            await checkAndDeductCredit(c, user.sub, provider)
+        } catch (e: any) {
+            if (e.message === 'OUT_OF_CREDITS') return c.json({ error: 'OUT_OF_CREDITS' }, 403)
+            if (e.message === 'USER_NOT_FOUND') return c.json({ error: 'User not found' }, 404)
+            return c.json({ error: 'Credit check failed' }, 500)
+        }
+
         const userPrompt = `正在審閱的章節：${sectionTitle}
 【原稿內容】
 ${sectionContent}`;
@@ -700,6 +720,13 @@ aiApp.post('/project/:projectId/quality-check', async (c) => {
 
     // 3. Determine AI provider
     const { provider, apiKey } = await getAIProvider(c, user.sub)
+    try {
+        await checkAndDeductCredit(c, user.sub, provider)
+    } catch (e: any) {
+        if (e.message === 'OUT_OF_CREDITS') return c.json({ error: 'OUT_OF_CREDITS' }, 403)
+        if (e.message === 'USER_NOT_FOUND') return c.json({ error: 'User not found' }, 404)
+        return c.json({ error: 'Credit check failed' }, 500)
+    }
 
     const qualityPrompt = `你是一位嚴謹的 SBIR 計畫書審查委員，請根據以下計畫書草稿內容，逐一判斷是否符合各項品質標準。
 
@@ -813,14 +840,9 @@ aiApp.post('/project/:projectId/company-verify', async (c) => {
     // 2. Fall back to live fetch if cache is missing
     if (!g0vData) {
         try {
-            const g0vUrl = `https://company.g0v.ronny.tw/api/search?q=${encodeURIComponent(companyName)}&page=0`
-            const g0vResponse = await fetch(g0vUrl, {
-                headers: { 'Accept': 'application/json', 'User-Agent': 'SBIR-Assistant/1.0' }
-            })
-            if (g0vResponse.ok) {
-                g0vData = await g0vResponse.json()
-                console.log('[COMPANY VERIFY] Live g0v fetch succeeded (no cache)')
-            }
+            const lookup = await fetchCompanyLookup(c.env, companyName)
+            g0vData = lookup.payload
+            console.log('[COMPANY VERIFY] Live g0v fetch succeeded (no cache)')
         } catch (err: any) {
             console.error('[COMPANY VERIFY] g0v fetch failed:', err.message)
         }
@@ -915,7 +937,11 @@ aiApp.put('/project/:projectId/section/:sectionIndex/save', async (c) => {
     const projectId = c.req.param('projectId')
     const sectionIndex = parseInt(c.req.param('sectionIndex'), 10)
 
-    const { content } = await c.req.json();
+    const requestBody = await c.req.json().catch(() => null);
+    if (!requestBody || typeof requestBody !== 'object') {
+        return c.json({ error: 'Invalid request body' }, 400)
+    }
+    const { content } = requestBody as { content?: string };
     if (content === undefined) return c.json({ error: 'Missing content' }, 400)
 
     const project = await c.env.DB.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?')
@@ -1034,6 +1060,13 @@ ${sectionContents || '（尚未生成）'}
 請現在開始輸出完整的 Markdown 簡報內容。`
 
     const { provider, apiKey } = await getAIProvider(c, user.sub)
+    try {
+        await checkAndDeductCredit(c, user.sub, provider)
+    } catch (e: any) {
+        if (e.message === 'OUT_OF_CREDITS') return c.json({ error: 'OUT_OF_CREDITS' }, 403)
+        if (e.message === 'USER_NOT_FOUND') return c.json({ error: 'User not found' }, 404)
+        return c.json({ error: 'Credit check failed' }, 500)
+    }
 
     return streamSSE(c, async (stream) => {
         try {
@@ -1091,4 +1124,3 @@ ${sectionContents || '（尚未生成）'}
         }
     })
 })
-

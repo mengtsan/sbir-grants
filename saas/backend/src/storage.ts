@@ -1,9 +1,10 @@
 import { Hono } from 'hono'
-import { authMiddleware, Bindings, Variables } from './middleware'
+import { apiRateLimitMiddleware, authMiddleware, Bindings, uploadRateLimitMiddleware, Variables } from './middleware'
 
 const storageApp = new Hono<{ Bindings: Bindings; Variables: Variables }>({ strict: false })
 
 storageApp.use('*', authMiddleware)
+storageApp.use('*', apiRateLimitMiddleware)
 
 // List all documents for a project
 storageApp.get('/project/:projectId', async (c) => {
@@ -37,6 +38,50 @@ const ALLOWED_MIME_TYPES = new Set([
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
 
+const bufferToHex = (buffer: ArrayBuffer): string =>
+    Array.from(new Uint8Array(buffer))
+        .map((byte) => byte.toString(16).padStart(2, '0'))
+        .join('')
+
+const computeContentHash = async (arrayBuffer: ArrayBuffer): Promise<string> => {
+    const digest = await crypto.subtle.digest('SHA-256', arrayBuffer)
+    return bufferToHex(digest)
+}
+
+const cloneDocumentChunks = async (
+    env: Bindings,
+    sourceDocumentId: string,
+    targetDocumentId: string,
+    projectId: string
+) => {
+    const sourceChunks = await env.DB.prepare(
+        'SELECT chunk_index, chunk_text, section_tags FROM document_chunks WHERE document_id = ? ORDER BY chunk_index ASC'
+    ).bind(sourceDocumentId).all<{
+        chunk_index: number
+        chunk_text: string
+        section_tags: string
+    }>()
+
+    if (!sourceChunks.results || sourceChunks.results.length === 0) return 0
+
+    const statements = sourceChunks.results.map((chunk) =>
+        env.DB.prepare(
+            `INSERT INTO document_chunks (id, document_id, project_id, chunk_index, chunk_text, section_tags)
+             VALUES (?, ?, ?, ?, ?, ?)`
+        ).bind(
+            crypto.randomUUID(),
+            targetDocumentId,
+            projectId,
+            chunk.chunk_index,
+            chunk.chunk_text,
+            chunk.section_tags
+        )
+    )
+
+    await env.DB.batch(statements)
+    return statements.length
+}
+
 function validateMagicBytes(bytes: Uint8Array, mimeType: string): boolean {
     const b = bytes
     // PDF: starts with %PDF
@@ -58,7 +103,7 @@ function validateMagicBytes(bytes: Uint8Array, mimeType: string): boolean {
 }
 
 // Upload a file to a project (PDF, Word, Excel only — max 20MB)
-storageApp.post('/project/:projectId/upload', async (c) => {
+storageApp.post('/project/:projectId/upload', uploadRateLimitMiddleware, async (c) => {
     const user = c.get('user')
     const projectId = c.req.param('projectId')
 
@@ -69,7 +114,18 @@ storageApp.post('/project/:projectId/upload', async (c) => {
 
     if (!project) return c.json({ error: 'Project not found' }, 404)
 
-    const formData = await c.req.parseBody()
+    const contentLengthHeader = c.req.header('content-length')
+    if (contentLengthHeader) {
+        const contentLength = Number(contentLengthHeader)
+        if (Number.isFinite(contentLength) && contentLength > 25 * 1024 * 1024) {
+            return c.json({ error: 'Request body too large' }, 413)
+        }
+    }
+
+    const formData = await c.req.parseBody().catch(() => null)
+    if (!formData) {
+        return c.json({ error: 'Invalid upload form data' }, 400)
+    }
     const file = formData['file']
 
     if (!(file instanceof File)) {
@@ -92,32 +148,67 @@ storageApp.post('/project/:projectId/upload', async (c) => {
     if (!validateMagicBytes(header, file.type)) {
         return c.json({ error: '檔案內容與副檔名不符，上傳失敗。' }, 400)
     }
+    const contentHash = await computeContentHash(arrayBuffer)
 
     // Generate unique object key
     const ext = file.name.split('.').pop() || 'bin'
     const fileId = crypto.randomUUID()
     const r2Key = `projects/${user.sub}/${projectId}/${fileId}.${ext}`
 
+    const existingDoc = await c.env.DB.prepare(
+        `SELECT id, extraction_status
+         FROM documents
+         WHERE project_id = ? AND content_hash = ?
+         ORDER BY uploaded_at DESC
+         LIMIT 1`
+    ).bind(projectId, contentHash).first<{ id: string, extraction_status: string | null }>()
+
     // Upload to R2
     await c.env.sbir_saas_bucket.put(r2Key, arrayBuffer, {
         httpMetadata: { contentType: file.type }
     })
 
-    // Insert DB record
-    await c.env.DB.prepare(
-        'INSERT INTO documents (id, project_id, file_name, r2_object_key, content_type, size_bytes) VALUES (?, ?, ?, ?, ?, ?)'
-    )
-        .bind(fileId, projectId, file.name, r2Key, file.type, file.size)
-        .run()
+    if (existingDoc?.extraction_status === 'done') {
+        await c.env.DB.prepare(
+            `INSERT INTO documents (
+                id, project_id, file_name, r2_object_key, content_type, size_bytes, content_hash,
+                duplicate_of_document_id, extraction_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'done')`
+        )
+            .bind(fileId, projectId, file.name, r2Key, file.type, file.size, contentHash, existingDoc.id)
+            .run()
 
-    // Enqueue background processing job
-    await c.env.DOC_QUEUE.send({
-        documentId: fileId,
-        projectId,
-        r2Key,
-        fileName: file.name,
-        contentType: file.type,
-    })
+        const clonedCount = await cloneDocumentChunks(c.env, existingDoc.id, fileId, projectId)
+        console.log(`[storage] Reused processed document ${existingDoc.id} for duplicate upload ${fileId}, cloned ${clonedCount} chunks`)
+    } else if (existingDoc && (existingDoc.extraction_status === 'pending' || existingDoc.extraction_status === 'processing')) {
+        await c.env.DB.prepare(
+            `INSERT INTO documents (
+                id, project_id, file_name, r2_object_key, content_type, size_bytes, content_hash,
+                duplicate_of_document_id, extraction_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`
+        )
+            .bind(fileId, projectId, file.name, r2Key, file.type, file.size, contentHash, existingDoc.id)
+            .run()
+        console.log(`[storage] Deferred duplicate upload ${fileId}; waiting for source document ${existingDoc.id} to finish`)
+    } else {
+        // Insert DB record
+        await c.env.DB.prepare(
+            `INSERT INTO documents (
+                id, project_id, file_name, r2_object_key, content_type, size_bytes, content_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+            .bind(fileId, projectId, file.name, r2Key, file.type, file.size, contentHash)
+            .run()
+
+        // Enqueue background processing job
+        await c.env.DOC_QUEUE.send({
+            documentId: fileId,
+            projectId,
+            r2Key,
+            fileName: file.name,
+            contentType: file.type,
+        })
+    }
 
     const docRecord = await c.env.DB.prepare('SELECT * FROM documents WHERE id = ?').bind(fileId).first()
     return c.json(docRecord, 201)
@@ -236,9 +327,16 @@ storageApp.get('/document/:docId/chunks', async (c) => {
 storageApp.patch('/chunk/:chunkId/sections', async (c) => {
     const user = c.get('user')
     const chunkId = c.req.param('chunkId')
-    const { section_tags } = await c.req.json<{ section_tags: number[] }>()
+    const body = await c.req.json<{ section_tags: number[] }>().catch(() => null)
+    if (!body) return c.json({ error: 'Invalid request body' }, 400)
+    const { section_tags } = body
 
     if (!Array.isArray(section_tags)) return c.json({ error: 'section_tags must be an array' }, 400)
+    if (section_tags.length > 8) return c.json({ error: 'Too many section tags' }, 400)
+    if (!section_tags.every((tag) => Number.isInteger(tag) && tag >= 1 && tag <= 8)) {
+        return c.json({ error: 'section_tags must contain integers between 1 and 8' }, 400)
+    }
+    const normalizedTags = [...new Set(section_tags)].sort((a, b) => a - b)
 
     // Verify ownership via joins
     const chunk = await c.env.DB.prepare(
@@ -251,7 +349,7 @@ storageApp.patch('/chunk/:chunkId/sections', async (c) => {
 
     await c.env.DB.prepare(
         'UPDATE document_chunks SET section_tags = ? WHERE id = ?'
-    ).bind(JSON.stringify(section_tags), chunkId).run()
+    ).bind(JSON.stringify(normalizedTags), chunkId).run()
 
     return c.json({ success: true })
 })

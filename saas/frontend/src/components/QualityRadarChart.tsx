@@ -1,12 +1,3 @@
-import {
-    Radar,
-    RadarChart,
-    PolarGrid,
-    PolarAngleAxis,
-    PolarRadiusAxis,
-    ResponsiveContainer,
-    Tooltip
-} from 'recharts';
 import { CheckCircle2, XCircle } from 'lucide-react';
 
 interface QualityRadarChartProps {
@@ -24,17 +15,49 @@ const DIMENSION_LABELS: Record<string, string> = {
     "ch_12": "語氣專業度"
 };
 
+const CHART_SIZE = 280;
+const CENTER = CHART_SIZE / 2;
+const MAX_RADIUS = 92;
+const LABEL_RADIUS = 122;
+const GRID_LEVELS = 5;
+
+const polarToCartesian = (angle: number, radius: number) => ({
+    x: CENTER + Math.cos(angle) * radius,
+    y: CENTER + Math.sin(angle) * radius,
+});
+
+const buildPolygonPath = (values: number[], radius: number) => {
+    const step = (Math.PI * 2) / values.length;
+    return values.map((value, index) => {
+        const angle = -Math.PI / 2 + (step * index);
+        const point = polarToCartesian(angle, (value / 100) * radius);
+        return `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+    }).join(' ') + ' Z';
+}
+
 export default function QualityRadarChart({ results, reasons, scorePct }: QualityRadarChartProps) {
     if (!results || Object.keys(results).length === 0) {
         return <div className="p-4 text-center text-gray-500">尚無審查資料</div>;
     }
 
-    // Prepare data for recharts
-    const chartData = Object.keys(DIMENSION_LABELS).map(key => ({
+    const dimensions = Object.keys(DIMENSION_LABELS).map((key) => ({
+        key,
         subject: DIMENSION_LABELS[key],
-        score: results[key] ? 100 : 20, // Give some minimum radius so the chart isn't empty
-        fullMark: 100
+        score: results[key] ? 100 : 20,
     }));
+    const polygonPath = buildPolygonPath(dimensions.map((item) => item.score), MAX_RADIUS);
+    const gridPaths = Array.from({ length: GRID_LEVELS }, (_, level) => {
+        const value = ((level + 1) / GRID_LEVELS) * 100;
+        return buildPolygonPath(new Array(dimensions.length).fill(value), MAX_RADIUS);
+    });
+    const axisLines = dimensions.map((_, index) => {
+        const angle = -Math.PI / 2 + ((Math.PI * 2) / dimensions.length) * index;
+        return polarToCartesian(angle, MAX_RADIUS);
+    });
+    const labelPoints = dimensions.map((item, index) => {
+        const angle = -Math.PI / 2 + ((Math.PI * 2) / dimensions.length) * index;
+        return { ...item, ...polarToCartesian(angle, LABEL_RADIUS) };
+    });
 
     const failedDimensions = Object.keys(results).filter(key => !results[key]);
     const passedDimensions = Object.keys(results).filter(key => results[key]);
@@ -46,25 +69,63 @@ export default function QualityRadarChart({ results, reasons, scorePct }: Qualit
                 <h3 className="text-lg font-bold text-slate-800 mb-2">計畫書 6 維度品質診斷</h3>
                 <div className="text-sm text-slate-500 mb-4">綜合防禦力：{scorePct}%</div>
 
-                <div className="w-full h-64 md:h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <RadarChart cx="50%" cy="50%" outerRadius="70%" data={chartData}>
-                            <PolarGrid stroke="#e2e8f0" />
-                            <PolarAngleAxis dataKey="subject" tick={{ fill: '#475569', fontSize: 12, fontWeight: 500 }} />
-                            <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
-                            <Radar
-                                name="專案品質"
-                                dataKey="score"
-                                stroke="#3b82f6"
-                                fill="#3b82f6"
-                                fillOpacity={0.4}
+                <div className="w-full max-w-[320px]">
+                    <svg
+                        viewBox={`0 0 ${CHART_SIZE} ${CHART_SIZE}`}
+                        className="w-full h-auto"
+                        role="img"
+                        aria-label="SBIR 計畫書品質六維雷達圖"
+                    >
+                        {gridPaths.map((path, index) => (
+                            <path
+                                key={`grid-${index}`}
+                                d={path}
+                                fill="none"
+                                stroke="#dbeafe"
+                                strokeWidth={index === gridPaths.length - 1 ? 1.5 : 1}
                             />
-                            <Tooltip
-                                formatter={(value: any) => [value === 100 ? '✅ 通過' : '❌ 需改善', '狀態']}
-                                labelStyle={{ color: '#1e293b', fontWeight: 'bold' }}
+                        ))}
+
+                        {axisLines.map((point, index) => (
+                            <line
+                                key={`axis-${index}`}
+                                x1={CENTER}
+                                y1={CENTER}
+                                x2={point.x}
+                                y2={point.y}
+                                stroke="#cbd5e1"
+                                strokeWidth="1"
                             />
-                        </RadarChart>
-                    </ResponsiveContainer>
+                        ))}
+
+                        <path
+                            d={polygonPath}
+                            fill="rgba(59, 130, 246, 0.28)"
+                            stroke="#2563eb"
+                            strokeWidth="2.5"
+                        />
+
+                        {labelPoints.map((point) => (
+                            <text
+                                key={point.key}
+                                x={point.x}
+                                y={point.y}
+                                textAnchor={point.x < CENTER - 8 ? 'end' : point.x > CENTER + 8 ? 'start' : 'middle'}
+                                dominantBaseline={point.y < CENTER - 8 ? 'alphabetic' : point.y > CENTER + 8 ? 'hanging' : 'middle'}
+                                className="fill-slate-600 text-[11px] font-medium"
+                            >
+                                {point.subject}
+                            </text>
+                        ))}
+                    </svg>
+                    <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-slate-500">
+                        {dimensions.map((item) => (
+                            <div key={item.key} className="flex items-center gap-2">
+                                <span className={`inline-block h-2.5 w-2.5 rounded-full ${results[item.key] ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                                <span>{item.subject}</span>
+                            </div>
+                        ))}
+                    </div>
                 </div>
             </div>
 

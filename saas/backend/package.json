@@ -4,7 +4,9 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "export:company-leads": "bash scripts/export_company_leads.sh",
+    "report:company-leads": "node scripts/company_leads_report.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.46",

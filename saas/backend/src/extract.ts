@@ -1,10 +1,12 @@
 import { Hono } from 'hono'
-import { authMiddleware, Bindings, Variables } from './middleware'
-import { getAIProvider } from './ai'
+import { authMiddleware, aiRateLimitMiddleware, Bindings, Variables } from './middleware'
+import { getAIProvider } from './utils/ai_provider'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { generateText } from 'ai'
+import { checkAndDeductCredit } from './utils/credits'
+import { buildAiCacheKey, readAiCache, writeAiCache } from './utils/ai_request_cache'
 
 const extractApp = new Hono<{ Bindings: Bindings; Variables: Variables }>({ strict: false })
 
@@ -19,7 +21,9 @@ interface ExtractedAnswer {
     extracted_answer: string
 }
 
-extractApp.post('/', authMiddleware, async (c) => {
+const EXTRACT_CACHE_TTL_SECONDS = 60 * 30
+
+extractApp.post('/', authMiddleware, aiRateLimitMiddleware, async (c) => {
     try {
         const body = await c.req.json<{
             user_input: string
@@ -30,6 +34,16 @@ extractApp.post('/', authMiddleware, async (c) => {
 
         if (!user_input || !unanswered_questions || unanswered_questions.length === 0) {
             return c.json({ extracted: [] })
+        }
+
+        const user = c.get('user')
+        const cacheKey = await buildAiCacheKey('extract', user.sub, {
+            user_input,
+            unanswered_questions,
+        })
+        const cachedResponse = await readAiCache<{ extracted: ExtractedAnswer[] }>(c.env, cacheKey)
+        if (cachedResponse) {
+            return c.json(cachedResponse)
         }
 
         // Build a terse questions list for the prompt
@@ -58,8 +72,15 @@ ${questionsList}
             { role: 'user', content: `使用者說：「${user_input}」` },
         ]
 
-        const user = c.get('user')
         const { provider, apiKey } = await getAIProvider(c, user.sub)
+
+        try {
+            await checkAndDeductCredit(c, user.sub, provider)
+        } catch (e: any) {
+            if (e.message === 'OUT_OF_CREDITS') return c.json({ extracted: [], error: 'OUT_OF_CREDITS' }, 403)
+            if (e.message === 'USER_NOT_FOUND') return c.json({ extracted: [], error: 'User not found' }, 404)
+            return c.json({ extracted: [], error: 'Credit check failed' }, 500)
+        }
 
         let rawText = '';
 
@@ -142,7 +163,16 @@ ${questionsList}
             }
         )
 
-        return c.json({ extracted: sanitised })
+        const responsePayload = { extracted: sanitised }
+        await writeAiCache(c.env, {
+            cacheKey,
+            endpoint: 'extract',
+            userId: user.sub,
+            response: responsePayload,
+            ttlSeconds: EXTRACT_CACHE_TTL_SECONDS,
+        })
+
+        return c.json(responsePayload)
     } catch (err) {
         console.error('[extract] error:', err)
         return c.json({ extracted: [], error: 'Extraction failed' }, 500)

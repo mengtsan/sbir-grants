@@ -1,9 +1,10 @@
 import { Hono } from 'hono'
-import { authMiddleware, Bindings, Variables } from './middleware'
+import { apiRateLimitMiddleware, authMiddleware, Bindings, Variables } from './middleware'
 
 const qualityApp = new Hono<{ Bindings: Bindings; Variables: Variables }>({ strict: false })
 
 qualityApp.use('*', authMiddleware)
+qualityApp.use('*', apiRateLimitMiddleware)
 
 export interface QualityDimension {
     label: string;
