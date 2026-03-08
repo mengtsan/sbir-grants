@@ -16,6 +16,25 @@ interface Project {
     updated_at: string;
 }
 
+function normalizeProjectsPayload(payload: unknown): Project[] {
+    if (Array.isArray(payload)) return payload as Project[];
+    if (payload && typeof payload === 'object') {
+        const candidate = payload as { items?: unknown; projects?: unknown };
+        if (Array.isArray(candidate.items)) return candidate.items as Project[];
+        if (Array.isArray(candidate.projects)) return candidate.projects as Project[];
+    }
+    return [];
+}
+
+function normalizeProjectPayload(payload: unknown): Project | null {
+    if (payload && typeof payload === 'object') {
+        const candidate = payload as { project?: unknown; id?: unknown };
+        if (candidate.project) return normalizeProjectPayload(candidate.project);
+        if (typeof candidate.id === 'string') return candidate as Project;
+    }
+    return null;
+}
+
 export default function Projects() {
     const [projects, setProjects] = useState<Project[]>([]);
     const [loading, setLoading] = useState(true);
@@ -30,7 +49,7 @@ export default function Projects() {
     const fetchProjects = async () => {
         try {
             const { data } = await axios.get(`${API_BASE}/projects`);
-            setProjects(data);
+            setProjects(normalizeProjectsPayload(data));
         } catch (e) {
             console.error('Failed to fetch projects', e);
         } finally {
@@ -47,7 +66,10 @@ export default function Projects() {
                 title: newTitle,
                 county: newCounty,
             });
-            setProjects([data, ...projects]);
+            const createdProject = normalizeProjectPayload(data);
+            if (createdProject) {
+                setProjects([createdProject, ...projects]);
+            }
             setIsCreateModalOpen(false);
             setNewTitle('');
             setNewCounty('');

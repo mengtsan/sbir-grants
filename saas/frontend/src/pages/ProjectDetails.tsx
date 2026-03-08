@@ -45,6 +45,33 @@ interface DocChunk {
     section_tags: string; // JSON string e.g. "[1,3]"
 }
 
+function normalizeArrayPayload<T>(payload: unknown, preferredKeys: string[] = []): T[] {
+    if (Array.isArray(payload)) return payload as T[];
+    if (payload && typeof payload === 'object') {
+        const record = payload as Record<string, unknown>;
+        for (const key of preferredKeys) {
+            if (Array.isArray(record[key])) return record[key] as T[];
+        }
+        if (Array.isArray(record.items)) return record.items as T[];
+        if (Array.isArray(record.data)) return record.data as T[];
+    }
+    return [];
+}
+
+function normalizeProjectPayload(payload: unknown): Project | null {
+    if (payload && typeof payload === 'object') {
+        const record = payload as Record<string, unknown>;
+        if (record.project) return normalizeProjectPayload(record.project);
+        if (typeof record.id === 'string' && typeof record.title === 'string') {
+            return {
+                ...(record as Project),
+                sections: normalizeArrayPayload<Section>(record.sections, ['sections']),
+            };
+        }
+    }
+    return null;
+}
+
 export default function ProjectDetails() {
     const { id } = useParams<{ id: string }>();
     const [project, setProject] = useState<Project | null>(null);
@@ -119,8 +146,9 @@ export default function ProjectDetails() {
     const fetchDocStatus = useCallback(async () => {
         try {
             const { data } = await axios.get(`${API_BASE}/storage/project/${id}/status`);
-            setDocStatusList(data);
-            return data;
+                        const normalizedDocuments = normalizeArrayPayload<Document>(data, ['documents']);
+            setDocStatusList(normalizedDocuments);
+            return normalizedDocuments;
         } catch { return []; }
     }, [id]);
 
@@ -128,7 +156,7 @@ export default function ProjectDetails() {
         if (docChunks[docId]) return; // already loaded
         try {
             const { data } = await axios.get(`${API_BASE}/storage/document/${docId}/chunks`);
-            setDocChunks(prev => ({ ...prev, [docId]: data }));
+                        setDocChunks(prev => ({ ...prev, [docId]: normalizeArrayPayload<DocChunk>(data, ['chunks']) }));
         } catch { }
     };
 
@@ -162,11 +190,14 @@ export default function ProjectDetails() {
                 axios.get(`${API_BASE}/storage/project/${id}`),
                 axios.get(`${API_BASE}/projects/${id}/sections`)
             ]);
-            setProject({ ...projRes.data, sections: sectionsRes.data });
-            setDocuments(docsRes.data);
+                        const normalizedProject = normalizeProjectPayload(projRes.data);
+            const normalizedSections = normalizeArrayPayload<Section>(sectionsRes.data, ['sections']);
+            const normalizedDocuments = normalizeArrayPayload<Document>(docsRes.data, ['documents']);
+            setProject(normalizedProject ? { ...normalizedProject, sections: normalizedSections } : null);
+            setDocuments(normalizedDocuments);
             try {
-                if (projRes.data.progress_data) {
-                    const parsed = JSON.parse(projRes.data.progress_data);
+                if (normalizedProject?.progress_data) {
+                                        const parsed = JSON.parse(normalizedProject.progress_data);
                     // Checklist data is stored under `checklists` key
                     setChecklistData(parsed.checklists || {});
                 }
