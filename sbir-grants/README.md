@@ -1,456 +1,298 @@
-# 🚀 SBIR Skill - AI 驅動的 SBIR 申請神器
+# SBIR Grants
 
-<div align="center">
+台灣經濟部 SBIR 申請輔助專案，包含兩條主線：
 
-![SBIR Skill](https://img.shields.io/badge/SBIR-Skill-brightgreen?style=for-the-badge)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-[![Files](https://img.shields.io/badge/Files-84+-blue.svg?style=for-the-badge)]()
-[![Words](https://img.shields.io/badge/Words-170K+-orange.svg?style=for-the-badge)]()
-[![Completion](https://img.shields.io/badge/Completion-99.5%25-success.svg?style=for-the-badge)]()
-[![FAQ](https://img.shields.io/badge/FAQ-122-green.svg?style=for-the-badge)]()
-[![Tools](https://img.shields.io/badge/MCP_Tools-11-purple.svg?style=for-the-badge)]()
+1. `SBIR Skill / MCP Server`
+   - 給 `Codex`、`Claude Code`、`Claude Desktop` 使用
+   - 以知識庫、MCP 工具、互動式問答與 Word 匯出為主
 
-**設計目標：協助您更快、更完整地完成 SBIR 申請**
+2. `SBIR SaaS`
+   - 雲端 Web 版
+   - 提供專案管理、AI 章節生成、文件上傳、RAG、品質評估與問答式專案資料整理
 
-[🎯 一鍵安裝](#-一鍵安裝) • [✨ 核心功能](#-核心功能) • [📝 自動生成計畫書](#-互動式計畫書生成器) • [📖 使用指南](#-使用指南) • [🌐 SaaS 網頁版](#-saas-網頁版)
+## 現況摘要
 
-</div>
+目前 repo 已對齊到這個方向：
 
----
+1. `SaaS` 與 `Skill` 的關鍵題目規則已同步
+   - `industry`
+   - `business_model`
+   - `team_experience`
+   - `customer_validation`
+   - `market_size`
+   - `budget_total`
+   - `expected_revenue_year1~3`
 
-## 🌐 SaaS 網頁版
+2. `Skill` 端已支援題目級補強
+   - `行銷顧問` 這類自然語言可整理成官方行業分類大類
+   - `要生成完整企劃書的時候要課金兩萬` 這類句子可整理成正式商業模式
+   - `我不知道怎麼估` 這類句子可觸發經費 / 營收補強邏輯
 
-> **無需安裝任何軟體！** 直接開啟瀏覽器即可使用所有 SBIR AI 輔助功能。
+3. `SaaS` 端目前主軸是「問答補齊」
+   - 正式答案以 `project_answers` 為單一真相來源
+   - 候選答案、顧問補寫、官方分類整理與 deterministic 經費試算已接上
+   - 高風險 fail-open fallback 已收斂
 
-[![SaaS](https://img.shields.io/badge/上線%20-sbir.thinkwithblack.com-blue?style=for-the-badge&logo=cloudflare)](https://sbir.thinkwithblack.com)
+## 使用入口
 
-| 功能 | 說明 |
-|------|------|
-| 🤖 **AI 章節生成** | 串流生成 9 大計畫書章節（Claude / Gemini） |
-| 📚 **混合式 RAG** | 關鍵字 + 語意搜尋 + MMR 多樣性排序 + Re-ranking |
-| 📄 **文件上傳** | PDF/DOCX 自動解析、語意切塊、向量索引、章節標記 |
-| 📊 **品質雷達圖** | 6 維度即時評分可視化 |
-| 💡 **市場數據擴寫** | 即時爬取 IEK、MIC 等產業數據 |
-| 🔑 **BYOK 金鑰** | 支援使用自己的 Claude / OpenAI / Gemini API Key |
+### 1. SaaS
 
-**技術架構**：Cloudflare Workers + D1 + R2 + Vectorize + AI + Queues  
-**完整部署文件**：👉 [SAAS.md](SAAS.md)
+正式站：
 
----
+- [https://sbir.thinkwithblack.com](https://sbir.thinkwithblack.com)
 
-## 🆕 2026 年 2 月更新
+技術文件：
 
-### 📍 全台 22 縣市地方型 SBIR 2026 資料大更新
+- [SAAS.md](SAAS.md)
 
-最新調查截至 **2026-02-21**，全台縣市公告狀態如下：
+適合：
 
-| 狀態 | 縣市 |
-|------|------|
-| ✅ **已公告/可申請 (1)** | 台北市 SITI（隨到隨審） |
-| 📋 **委託案籌備中 (4)** | 基隆市（1/1 決標）、宜蘭縣（2/13 決標）、花蓮縣（招標中）、台南市（招標中） |
-| 📅 **待公告 (17)** | 所有其他縣市皆尚未發布 115 年度正式公告（包含桃園、新北、新竹縣市、台中、彰化、高雄等），往年多集中於 4-6 月 |
+1. 一般使用者直接在瀏覽器完成 SBIR 專案資料與草稿生成
+2. 上傳文件、建立多專案、做章節級生成與品質檢查
 
-更多詳細資訊：[地方型 SBIR 追蹤表](references/local_sbir_2026_tracker.md)
+### 2. Codex
 
-### 🛠️ MCP Server 代碼修復（14 項）
+本 repo 內建標準 skill manifest：
 
-本次更新修復了幾個重要問題，建議所有 MCP Server 用戶更新：
+- [SKILL.md](SKILL.md)
 
-- 🔴 **[Critical] ROI 工具路由修正**：`calculate_roi` / `validate_roi` 之前因路由設定問題無法正常呼叫，現已修復
-- 🟡 **搜尋快取啟用**：修復快取未寫回的問題，搜尋結果現在會正確快取，重複查詢回應更快
-- 🟡 **計畫書檢核大小寫 bug**：`check_proposal` 現在正確進行不區分大小寫的完整度檢查
-- 🟡 **LRU 快取效能優化**：改用 `OrderedDict` 實現 O(1) 操作（原本為 O(n)）
-- 🟢 **雙向同義詞擴展**：搜尋「預算」也能自動展開到「補助」「經費」（之前只能單向展開）
-- 🟢 **Word 匯出路徑跨平台修復**：不再硬編碼 `~/Documents`，改為自動偵測桌面/文件目錄
-- 其他安全性改善（路徑穿越防護、錯誤處理、imports 整理）
+安裝與使用說明：
 
----
+- [CODEX_SETUP.md](CODEX_SETUP.md)
 
+適合：
 
-## 💡 為什麼需要 SBIR Skill？
+1. 把這份 repo 當成 SBIR 專業知識 skill 載入
+2. 讓 Codex 讀取方法論、FAQ、檢核清單、案例與提示規則
 
-### 傳統方式的痛點
+### 3. Claude Code / Claude Desktop
 
-- ❌ **耗時 2-3 個月**撰寫計畫書
-- ❌ **到處找資料**，不知道從何開始
-- ❌ **格式不確定**，擔心遺漏重點
-- ❌ **成功率低**，投入大量時間卻失敗
+本 repo 另附 MCP server：
 
-### 使用 SBIR Skill 後
+- [mcp-server/server.py](mcp-server/server.py)
 
-- ✅ **加速撰寫流程**，整合 84+ 個檔案的知識庫
-- ✅ **所有資料整合**，122 個 FAQ + 6 個方法論
-- ✅ **自動檢核**，確保完整性
-- ✅ **AI 自動生成**，Phase 1/2 完整計畫書
-- ✅ **Word 匯出**，一鍵產生 .docx 檔案
-- ✅ **經費試算**，自動建議預算分配
-- ✅ **提升申請品質**（真實案例指引 + 完整架構）
+設定說明：
 
----
+- [CLAUDE_CODE_MCP_SETUP.md](CLAUDE_CODE_MCP_SETUP.md)
+- [mcp-server/README.md](mcp-server/README.md)
 
-## 🎯 一鍵安裝
+適合：
 
-**完全不懂電腦？沒關係！** 只要 3 個步驟：
+1. 透過 MCP tools 執行互動式 proposal generator
+2. 呼叫 `enrich_answer`、`get_progress`、`save_answer`、`generate_proposal`
 
-### Mac 用戶
+## FAQ：是不是只能用 Claude？
+
+不是。
+
+目前可分成三種接法：
+
+1. `Codex`
+   - 透過 [SKILL.md](SKILL.md) 當成 skill 載入
+
+2. `Claude Code`
+   - 透過 [mcp-server/server.py](mcp-server/server.py) 以 stdio MCP server 連接
+
+3. `Claude Desktop`
+   - 透過同一個 MCP server 使用工具
+
+差別是：
+
+1. `Codex`
+   - 偏 skill / repo knowledge
+
+2. `Claude Code`
+   - 偏 MCP tools 與流程互動
+
+3. `Claude Desktop`
+   - 偏桌面端使用 MCP 工具
+
+對應的 GitHub 提問：
+
+- [Issue #6: 請問只能使用Claude嗎](https://github.com/backtrue/sbir-grants/issues/6)
+
+## 專案結構
+
+```text
+sbir-grants/
+├── README.md
+├── SKILL.md
+├── SAAS.md
+├── CODEX_SETUP.md
+├── CLAUDE_CODE_MCP_SETUP.md
+├── proposal_generator/
+│   ├── questions.json
+│   └── USAGE.md
+├── mcp-server/
+│   ├── server.py
+│   ├── enrich_answer.py
+│   ├── proposal_generator_impl.py
+│   ├── roi_calculator.py
+│   ├── pyproject.toml
+│   └── README.md
+├── references/
+├── faq/
+├── checklists/
+└── templates/
+```
+
+## 目前功能
+
+### Skill / MCP
+
+1. `proposal generator`
+   - 互動式問答
+   - 保存答案與讀取進度
+   - 生成 Phase 1 草稿
+
+2. `enrich_answer`
+   - 題目級補強
+   - 支援和 SaaS 對齊的關鍵 deterministic 行為
+
+3. `verify_company_eligibility_by_g0v`
+   - 公司資格與基本資料檢核
+
+4. `calculate_roi / validate_roi`
+   - ROI / 營收試算與合理性檢查
+
+5. `ingest / retrieve`
+   - 參考文件讀取、分塊、標記、檢索
+
+### SaaS
+
+1. 專案管理
+2. 問答式專案資料整理
+3. 候選答案 / 顧問補寫 / 正式答案分流
+4. 章節生成
+5. 文件上傳與文件引用
+6. 品質評估
+7. BYOK
+8. Cloudflare 部署
+
+## 關鍵設計原則
+
+### 1. 正式答案與候選答案分流
+
+SaaS 端目前採：
+
+1. `正式答案`
+   - canonical、可生成、可驗證
+
+2. `候選答案`
+   - 顧問整理
+   - 萃取建議
+   - 補寫草稿
+   - 需使用者確認後才成為正式答案
+
+### 2. Deterministic 優先
+
+對下列題目，優先使用規則與計算器，不放任模型自由編造：
+
+1. `industry`
+2. `business_model`
+3. `customer_validation`
+4. `budget_total`
+5. `budget_breakdown`
+6. `expected_revenue_year1~3`
+
+### 3. Fail-closed
+
+缺資料時，不應靠產品級 fallback 補空。  
+目前 `SaaS` 端已經收掉主要的 fail-open 路徑，避免：
+
+1. 缺資料還生成
+2. 缺證據還判通過
+3. 缺答案還塞預設值
+
+## 安裝與啟動
+
+### 本機 MCP Server
 
 ```bash
-# 1. 下載專案
-cd ~/Documents && git clone https://github.com/backtrue/sbir-grants.git && cd sbir-grants
-
-# 2. 執行安裝（自動配置所有東西）
-bash install-mac.sh
-
-# 3. 重啟 Claude Desktop，完成！
+cd /Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server
+uv pip install -e .
+uv run server.py
 ```
 
-### Windows 用戶
-
-1. [下載 ZIP](https://github.com/backtrue/sbir-grants/archive/refs/heads/main.zip)
-2. 解壓縮到「文件」資料夾
-3. 雙擊 `install-windows.bat`
-4. 重啟 Claude Desktop，完成！
-
-### 不會用終端機？
-
-👉 看[完整圖文教學](INSTALLATION.md)（超級詳細，一步步教您）
-
----
-
-## ✨ 核心功能
-
-### 🚀 v2.0 搜尋引擎大升級 (New!)
-
-我們剛剛引入了商業級的搜尋技術，大幅提升搜尋體驗：
-
-| 功能 | 說明 | 技術亮點 |
-|------|------|----------|
-| **🧠 AI 重排序** | 像真人一樣精讀結果 | 使用 `Cross-Encoder` 模型對前 20 名結果進行深度語意評分，精準度提升 40%。 |
-| **🌈 多樣性排序** | 避免結果重複 | 採用 **MMR 演算法**，確保搜尋結果來自不同文件，資訊更全面。 |
-| **⚡ 極速快取** | 常用查詢秒回 | 內建 LRU 快取機制，重複查詢回應速度提升 **400%** (0.2秒)。 |
-| **🔄 同義詞擴展** | 聽懂你的話 | 自動擴展查詢（如「經費」->「補助」、「預算」），不再漏掉關鍵資訊。 |
-| **📅 時效加權** | 優先顯示最新 | 自動識別文件年份，2026/2025 年的最新規定會優先顯示。 |
-| **💡 智慧建議** | 引導式搜尋 | 根據查詢內容，自動推薦「您可能也想了解」的相關問題。 |
-
-### 🤖 1. 智能知識庫搜尋
-
-**不需要記住檔案路徑！** Claude 會自動：
-- 🔍 搜尋相關文件（84+ 個檔案）
-- 📖 讀取內容並理解
-- 💡 根據知識庫精準回答
-
-**範例**：
-```
-您：我要寫創新構想，該怎麼寫？
-
-Claude：[自動搜尋 methodology_innovation.md]
-       [讀取完整方法論]
-       [提供結構化指導 + 實際範例]
-```
-
-**知識庫內容（170,000+ 字）**：
-- 📚 **6 個完整方法論**（問題陳述、創新、市場、可行性、團隊、經費）
-- ✍️ **撰寫技巧指南**（說故事 + 數據呈現 + 簡報技巧 + 服務創新）
-- ❓ **122 個 FAQ**（涵蓋資格、流程、經費、審查、執行、地方型）
-- ✅ **5 個檢核清單**（申請前、撰寫、經費、送件）
-- 📊 **7 個案例研究**（機械、服務、生技、綠能、電子產業）
-- 🎯 **快速啟動指南**（10 分鐘、1 小時、1 週）
-- 🏛️ **地方型 SBIR 總覽**（全台縣市比較 + 真實案例）
-- 📋 **執行與結案指南**（從簽約到結案）
-- 🆕 **2025 政策更新**（補助調高、專利補助）
-- 🎓 **審查意見回覆指南**（基於真實案例）
-- 💰 **經費編列說明**（委外合理性論述）
-- 🔍 **SWOT 分析深化**（真實成功案例）
-
----
-
-### 📝 2. 互動式計畫書生成器 ⭐ **超強功能**
-
-**25 個問題，自動生成完整 12-15 頁計畫書！**
-
-#### 使用流程
-
-```
-您：開始生成 Phase 1 計畫書
-
-Claude：好的！我會問您 25 個問題...
-
-📋 第 1/25 題 - 基本資訊
-請問您的公司全名是？
-
-您：台灣創新科技股份有限公司
-
-Claude：✅ 已保存
-進度：[█░░░░░░░░░░] 1/25 (4%)
-
-📋 第 2/25 題 - 基本資訊
-請問您的公司主要產業是？
-A) 機械 B) 化工/材料 C) 電子...
-
-...（繼續到第 25 題）
-
-Claude：🎉 計畫書已生成！
-       [顯示完整的 12-15 頁計畫書]
-```
-
-#### 生成的計畫書包含
-
-✅ **9 大完整章節**：
-1. 計畫摘要
-2. 問題陳述與市場需求
-3. 創新構想與技術方案
-4. 市場分析與商業模式
-5. 技術可行性評估
-6. 團隊組成與分工
-7. 執行計畫與時程
-8. 經費需求與使用規劃
-9. 預期成果與效益
-
-✅ **符合官方格式**  
-✅ **自動變數替換**  
-✅ **可直接複製到 Word**  
-✅ **人工優化後即可送件**
-
-#### 兩種使用模式
-
-| 功能 | Pro 用戶（Projects） | 免費用戶（MCP Server） |
-|------|---------------------|----------------------|
-| 互動式問答 | ✅ | ✅ |
-| 自動保存進度 | ✅ | ✅ |
-| 可中斷後繼續 | ✅ | ✅ |
-| 上傳文件輔助 | ✅ | ❌ |
-| 隨時修改答案 | ✅ | ⚠️ 需重新回答 |
-| 體驗 | 最佳 | 完整功能 |
-
-👉 查看[使用指南](proposal_generator/USAGE.md)
-
----
-
-### 📊 3. 市場數據自動查詢
-
-**混合式數據查詢系統**：
-- 🏛️ **官方 API**：經濟部統計處
-- 🌐 **網頁搜尋**：IEK、MIC、產業報告
-- 💾 **本地數據**：產業統計 JSON
-
-**範例**：
-```
-您：請幫我找機械產業的市場數據
-
-Claude：[呼叫 MCP Server]
-       [查詢經濟部統計處]
-       [搜尋 IEK 產業報告]
-       [整合多個來源]
-       [提供完整數據 + 來源連結]
-```
-
----
-
-### ✅ 4. 完整檢核系統
-
-**5 個階段的檢核清單**：
-- 📋 申請前檢核（評分系統）
-- ✍️ Phase 1 撰寫檢核（逐頁檢查）
-- ✍️ Phase 2 撰寫檢核
-- 💰 經費檢核（法規遵循）
-- 📤 送件前檢核（最終確認）
-
----
-
-## 🎯 完整使用流程
-
-### 步驟 1：確認資格（10 分鐘）
-
-```
-您：我的公司實收資本額 5000 萬，員工 50 人，可以申請 SBIR 嗎？
-
-Claude：[自動檢查資格]
-       ✅ 實收資本額 < 1 億（符合）
-       ✅ 員工數 < 200 人（符合）
-       [提供完整資格說明]
-```
-
----
-
-### 步驟 2：驗證構想（1 小時）
-
-```
-您：我想做 AI 客服系統給中小企業用，幫我用 1 小時構想驗證的方法評估
-
-Claude：[載入 1hour_idea_validation.md]
-       [引導您完成 4 個部分]
-       - 創新點驗證
-       - 客戶驗證
-       - 可行性檢查
-       - 市場規模估算
-       [給出評分和建議]
-```
-
----
-
-### 步驟 3：生成計畫書（30-45 分鐘）
-
-```
-您：開始生成 Phase 1 計畫書
-
-Claude：[啟動互動式生成器]
-       [25 個問題]
-       [自動保存進度]
-       [生成完整計畫書]
-```
-
----
-
-### 步驟 4：品質檢查
-
-```
-您：幫我檢查 Phase 1 計畫書是否完整
-
-Claude：[使用 writing_checklist_phase1.md]
-       [逐項檢查]
-       [指出需要補充的地方]
-```
-
----
-
-### 步驟 5：送件
-
-```
-您：送件前要準備哪些文件？
-
-Claude：[使用 submission_checklist.md]
-       [列出所有必要文件]
-       [提供送件注意事項]
-```
-
----
-
-## 📖 使用指南
-
-### 快速開始
-
-- 🚀 [第一次使用](FIRST_TIME_USE.md) - 4 個範例問題
-- 📖 [完整使用說明](HOW_TO_USE.md) - 詳細功能介紹
-- ✅ [確認安裝成功](VERIFICATION.md) - 測試方法
-
-### 新手指南
-
-- 📚 [SBIR 新手入門](GETTING_STARTED.md) - 從零開始
-- ⚡ [10 分鐘資格檢查](quick_start/10min_eligibility_check.md)
-- 💡 [1 小時構想驗證](quick_start/1hour_idea_validation.md)
-- 🚀 [1 週計畫書衝刺](quick_start/1week_proposal_sprint.md)
-
-### 進階資源
-
-- 📝 [方法論系列](references/) - 6 個完整框架
-- ❓ [FAQ 大全](FAQ.md) - 81 個常見問題
-- 📊 [案例研究](examples/case_studies/) - 成功 + 失敗案例
-- 📋 [範本庫](templates/) - Phase 1/2 範本
-
----
-
-
-## 📊 專案統計
-
-| 指標 | 數量 |
-|------|------|
-| 📁 總檔案數 | **77+** |
-| 📝 總字數 | **160,000+** |
-| ❓ FAQ 數量 | **101 個** |
-| 📚 方法論 | **6 個完整框架** |
-| ✍️ 撰寫指南 | **12 個專題** |
-| ✅ 檢核項目 | **200+** |
-| 📊 案例研究 | **6 個詳細案例** |
-| 🎯 完整度 | **98%** |
-
-**涵蓋完整申請流程**：
-```
-申請準備 → 計畫撰寫 → 簡報審查 → 執行管理 → 結案報告
-    ↓          ↓          ↓          ↓          ↓
-  ✅ FAQ    ✅ 技巧    ✅ 簡報    ✅ 指南    ✅ 範本
-```
-
----
-
-## 🔄 更新知識庫
-
-### 方法一：在 Claude 中直接說（推薦！）
-
-安裝後，只要在 Claude Desktop 中說：
-
-```
-請更新 SBIR 知識庫
-```
-
-Claude 會自動從 GitHub 拉取最新版本！
-
-### 方法二：手動更新
+或：
 
 ```bash
-cd sbir-grants && git pull
+cd /Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server
+pip install -e .
+python server.py
 ```
 
-> ⚠️ 如果您是下載 ZIP 的用戶，需要重新下載才能獲得更新
+依據：
 
----
+- [mcp-server/pyproject.toml](mcp-server/pyproject.toml)
+- [mcp-server/server.py](mcp-server/server.py)
 
-## 🛠️ 技術亮點
+### 本機 Skill 使用
 
-### 智能 MCP Server
+若要給 Codex 載入，請看：
 
-- 🔍 **自動知識庫搜尋**：關鍵字匹配 + 類別篩選
-- 📖 **文件自動讀取**：安全檢查 + 格式化輸出
-- 📊 **混合式數據查詢**：API + 網頁搜尋 + 本地數據
-- 💾 **狀態持久化**：JSON 檔案保存進度
+- [CODEX_SETUP.md](CODEX_SETUP.md)
 
-### 互動式生成器
+### SaaS 部署
 
-- 📋 **25 個結構化問題**：涵蓋所有章節
-- 🎯 **智能驗證**：必填檢查 + 長度限制 + 數值範圍
-- 🔄 **條件邏輯**：根據答案動態調整問題
-- 📝 **模板引擎**：自動變數替換 + 條件區塊
+請看：
 
-### 零門檻安裝
+- [SAAS.md](SAAS.md)
 
-- 🚀 **一鍵安裝腳本**：自動檢測 + 自動配置
-- 📖 **超簡單文件**：國小程度語言
-- ✅ **完整驗證**：確保安裝成功
+## 文件索引
 
----
+### 使用者導向
 
-## 🤝 貢獻
+1. [GETTING_STARTED.md](GETTING_STARTED.md)
+2. [FIRST_TIME_USE.md](FIRST_TIME_USE.md)
+3. [HOW_TO_USE.md](HOW_TO_USE.md)
+4. [FAQ.md](FAQ.md)
+5. [INSTALLATION.md](INSTALLATION.md)
+6. [VERIFICATION.md](VERIFICATION.md)
 
-歡迎貢獻！請查看 [CONTRIBUTING.md](CONTRIBUTING.md)
+### SBIR 撰寫與知識內容
 
----
+1. [references/](references)
+2. [faq/](faq)
+3. [checklists/](checklists)
+4. [templates/](templates)
 
-## 📄 授權
+### 提案問答流程
 
-MIT License - 詳見 [LICENSE](LICENSE)
+1. [proposal_generator/README.md](proposal_generator/README.md)
+2. [proposal_generator/USAGE.md](proposal_generator/USAGE.md)
+3. [proposal_generator/questions.json](proposal_generator/questions.json)
 
----
+### 技術與部署
 
-## 🙏 致謝
+1. [SAAS.md](SAAS.md)
+2. [mcp-server/README.md](mcp-server/README.md)
+3. [CODEX_SETUP.md](CODEX_SETUP.md)
+4. [CLAUDE_CODE_MCP_SETUP.md](CLAUDE_CODE_MCP_SETUP.md)
 
-感謝所有為台灣中小企業創新努力的人們。
+## 現況限制
 
----
+1. `Skill` 與 `SaaS` 已對齊關鍵題目規則，但還不是同一套完整執行環境
+2. `Skill` 目前沒有 `SaaS` 那種：
+   - 單題落庫
+   - completion engine
+   - planner-driven UI
+3. `Claude Code` 與 `Claude Desktop` 的可用能力，取決於 MCP server 是否正確掛載
 
-<div align="center">
+## 外部依據
 
-## 🚀 開始使用 SBIR Skill
+1. OpenAI Skills repository  
+   [https://github.com/openai/skills](https://github.com/openai/skills)
 
-**讓 AI 協助您成功申請 SBIR 補助**
+2. Anthropic Claude Code MCP  
+   [https://docs.anthropic.com/en/docs/claude-code/mcp](https://docs.anthropic.com/en/docs/claude-code/mcp)
 
-[⬇️ 立即下載](https://github.com/backtrue/sbir-grants/archive/refs/heads/main.zip) • [📖 查看文件](GETTING_STARTED.md) • [💬 問題回報](https://github.com/backtrue/sbir-grants/issues)
+3. Anthropic Claude Code Slash Commands  
+   [https://docs.anthropic.com/en/docs/claude-code/slash-commands](https://docs.anthropic.com/en/docs/claude-code/slash-commands)
 
----
+4. 行政院主計總處行業統計分類（官方主檔）  
+   政府資料開放平臺：
+   [https://data.gov.tw/dataset/14321](https://data.gov.tw/dataset/14321)
 
-**⭐ 如果這個專案對您有幫助，請給我們一個 Star！**
-
-Made with ❤️ for Taiwan SMEs
-
-</div>
-
-## 📚 See [Main Project README](../../README.md) for Full Features
-All advanced AI features (AI Draft Auto-Edit, Web Search, Quality Radar) have been reverse-ported from this Skill into the SaaS platform.
+5. 主計總處第 12 次修正說明  
+   [https://www.stat.gov.tw/News_Content.aspx?n=3110&s=235560](https://www.stat.gov.tw/News_Content.aspx?n=3110&s=235560)

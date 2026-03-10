@@ -1,286 +1,157 @@
-# SBIR Data MCP Server
+# SBIR MCP Server
 
-混合式市場數據查詢服務，整合台灣官方與法人機構數據來源。
+`sbir-grants` 的 MCP server，提供本機互動式 SBIR 問答、答案補強、公司資格檢核、ROI 計算、文件檢索與草稿輸出。
 
-## ✨ 最新功能 (v2.0 搜尋引擎升級)
+這份 README 只描述目前 repo 內**實際存在**的 MCP server 行為，不保留舊版單純「市場數據查詢器」的描述。
 
-我們引入了商業級的搜尋技術，大幅提升搜尋體驗：
+## 入口
 
-| 功能 | 說明 | 技術亮點 |
-|------|------|----------|
-| **🧠 AI 重排序** | 像真人一樣精讀結果 | 使用 `Cross-Encoder` 模型對前 20 名結果進行深度語意評分，精準度提升 40%。 |
-| **🌈 多樣性排序** | 避免結果重複 | 採用 **MMR 演算法**，確保搜尋結果來自不同文件，資訊更全面。 |
-| **⚡ 極速快取** | 常用查詢秒回 | 內建 LRU 快取機制，重複查詢回應速度提升 **400%** (0.2秒)。 |
-| **🔄 同義詞擴展** | 聽懂你的話 | 自動擴展查詢（如「經費」->「補助」、「預算」），不再漏掉關鍵資訊。 |
-| **📅 時效加權** | 優先顯示最新 | 自動識別文件年份，2026/2025 年的最新規定會優先顯示。 |
-| **💡 智慧建議** | 引導式搜尋 | 根據查詢內容，自動推薦「您可能也想了解」的相關問題。 |
+主要程式：
 
-## 🎯 設計理念：混合式架構
+- [server.py](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server/server.py)
 
-本 MCP Server 採用**混合式設計**，結合 MCP Server 與 Claude 內建工具的優勢：
+套件定義：
 
-| 數據來源 | 查詢方式 | 原因 |
-|---------|---------|------|
-| 📊 經濟部統計處 | **MCP Server** | 有官方 API，適合結構化查詢 |
-| 🔬 工研院 IEK | **Claude `search_web`** | 無公開 API，需網頁搜尋 |
-| 💻 資策會 MIC | **Claude `search_web`** | 無公開 API，需網頁搜尋 |
+- [pyproject.toml](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server/pyproject.toml)
 
-### 為什麼是混合式？
+啟動方式：
 
-**MCP Server 的限制**：
-- ❌ 無法直接呼叫 Claude 的 `search_web` 工具
-- ❌ 實作 web scraping 複雜且維護成本高
-- ❌ Google Custom Search API 需要額外費用
+1. `server.py` 的 `main()` 使用 `mcp.server.stdio.stdio_server`
+2. `pyproject.toml` 已定義：
+   - `sbir-data-server = "server:main"`
 
-**解決方案**：
-- ✅ MCP Server 專注於**有 API 的數據源**（經濟部統計處）
-- ✅ Claude 使用內建 `search_web` 處理**需要搜尋的數據源**（IEK、MIC）
-- ✅ `references/claude_automation_guide.md` 指導 Claude 如何協調兩者
-- ⚠️ **系統需求**：請預留約 **1.5 GB** 的硬碟空間，用於安裝 AI 語意搜尋所需的深度學習函式庫。
+## 適用場景
 
----
+這個 MCP server 主要用在：
 
-## 🛠️ 功能
+1. `Claude Code`
+2. `Claude Desktop`
+3. 任何支援 stdio MCP 的 client
 
-### 可用工具
+若你要的是 `Codex` skill 載入，請看：
 
-#### 1. `query_moea_statistics`
+- [/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/CODEX_SETUP.md](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/CODEX_SETUP.md)
 
-查詢經濟部統計處總體統計資料庫。
+若你要的是 `Claude Code` 設定，請看：
 
-**參數**：
-- `industry`: 產業別（機械、化工、電子、資通訊、生技、服務業）
-- `stat_type`: 統計類型（產值、出口、就業人數）
-- `start_year`: 起始年份（預設 2020）
-- `end_year`: 結束年份（預設 2024）
+- [/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/CLAUDE_CODE_MCP_SETUP.md](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/CLAUDE_CODE_MCP_SETUP.md)
 
-**範例**：
-```python
-query_moea_statistics(
-    industry="機械",
-    stat_type="產值",
-    start_year=2020,
-    end_year=2024
-)
-```
+## 目前提供的能力
 
-**目前狀態**：
-- ⚠️ 回傳說明訊息與建議
-- ⚠️ 實際 API 查詢需要「功能代碼」（較複雜）
-- ✅ 建議使用 Claude `search_web` 作為替代方案
+### 1. Proposal Generator
 
-#### 2. `search_moea_website`
+互動式 SBIR 問答流程：
 
-提供經濟部網站搜尋建議。
+1. 開始問答
+2. 保存單題答案
+3. 讀取進度
+4. 生成草稿
 
-**參數**：
-- `keyword`: 搜尋關鍵字
+相關檔案：
 
-**功能**：
-- 提供搜尋建議
-- 推薦使用 Claude `search_web` 的查詢語法
-- 列出推薦查詢網站
+- [proposal_generator_impl.py](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server/proposal_generator_impl.py)
+- [/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/proposal_generator/questions.json](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/proposal_generator/questions.json)
 
----
+### 2. 題目級補強
 
-## 📋 完整查詢流程
+`enrich_answer` 現在已和 SaaS 的關鍵規則對齊，支援：
 
-根據 `references/claude_automation_guide.md`，Claude 會自動執行以下流程：
+1. `industry` 自然語言整理成官方行業統計分類大類
+2. `business_model` 自然語言整理成正式商業模式
+3. `team_experience = 沒有 / 尚無 / 目前沒有`
+4. `customer_validation = 0 / 尚未訪談`
+5. `budget_total = 我不知道怎麼估`
+6. `expected_revenue_year1~3 = 我不知道怎麼估`
+7. `market_size = 我不知道怎麼估`
 
-```mermaid
-graph TD
-    A[用戶請求市場數據] --> B[Claude 分析需求]
-    B --> C[呼叫 MCP: query_moea_statistics]
-    B --> D[使用 search_web: 工研院 IEK]
-    B --> E[使用 search_web: 資策會 MIC]
-    C --> F[整合所有數據]
-    D --> F
-    E --> F
-    F --> G[格式化輸出]
-```
+相關檔案：
 
-**範例對話**：
+- [enrich_answer.py](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server/enrich_answer.py)
+- [/Users/backtrue/Documents/claude-sbir-skills/shared_domain/enrich_criteria.json](/Users/backtrue/Documents/claude-sbir-skills/shared_domain/enrich_criteria.json)
 
-```
-用戶：「我要寫機械產業的問題陳述，請幫我找市場數據」
+### 3. 公司資格檢核
 
-Claude 自動執行：
-1. 呼叫 MCP Server: query_moea_statistics(industry="機械", stat_type="產值")
-2. 使用 search_web: "機械產業 市場規模 site:iek.itri.org.tw"
-3. 整合結果並格式化
+支援透過 g0v 做公司基本資料與資格檢核：
 
-Claude 回應：
-「根據經濟部統計處，2024 年台灣機械產業產值約 1,200 億元...
-根據工研院 IEK 報告，機械產業年複合成長率預估為 5.2%...」
-```
+- `verify_company_eligibility_by_g0v`
 
----
+### 4. ROI 與營收合理性檢查
 
-## 🚀 安裝
+支援：
 
-### 1. 安裝依賴
+1. `calculate_roi`
+2. `validate_roi`
 
-```bash
-cd /Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server
+相關檔案：
 
-# 使用 uv（推薦）
-uv pip install -e .
+- [roi_calculator.py](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server/roi_calculator.py)
 
-# 或使用 pip
-pip install -e .
-```
+### 5. 文件 ingest / retrieval
 
-### 2. 設定 Claude Desktop
+支援：
 
-編輯設定檔：
+1. 讀取文件
+2. 分塊
+3. 標記
+4. 檢索對應 chunk
 
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+### 6. 草稿保存與匯出
 
-```json
-{
-  "mcpServers": {
-    "sbir-data": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server",
-        "run",
-        "server.py"
-      ]
-    }
-  }
-}
-```
+支援：
 
-### 3. 重啟 Claude Desktop
-
-設定完成後，重啟 Claude Desktop 即可使用。
-
----
-
-## 📖 使用指南
-
-### 自動觸發（推薦）
-
-Claude 會根據 `references/claude_automation_guide.md` 自動判斷何時使用 MCP Server。
-
-**觸發情境**：
-- 用戶提到「市場數據」、「產業統計」
-- 撰寫問題陳述、市場分析章節
-- 需要產值、出口、就業等數據
-
-### 手動呼叫
-
-也可以明確要求：
-
-```
-「請使用 MCP Server 查詢機械產業的產值數據」
-```
-
----
-
-## 🔧 開發指引
-
-### 測試 Server
-
-```bash
-# 直接執行
-python server.py
-
-# 使用 MCP Inspector（推薦）
-npx @modelcontextprotocol/inspector uv --directory . run server.py
-```
-
-### 擴充功能
-
-如需新增數據來源：
-
-1. **有 API 的數據源** → 在 `server.py` 新增工具
-2. **需搜尋的數據源** → 更新 `references/claude_automation_guide.md`
-
----
-
-## ✅ 目前狀態
-
-### 已完成
-
-- ✅ MCP Server 基本架構
-- ✅ 工具定義（query_moea_statistics, search_moea_website）
-- ✅ 錯誤處理與指引訊息
-- ✅ Claude 自動化指引文件
-
-### 待優化（可選）
-
-- [ ] 實作經濟部 API 功能代碼查詢
-- [ ] 快取機制（避免重複查詢）
-- [ ] 更多產業數據源
-
-**注意**：由於經濟部 API 需要「功能代碼」且查詢複雜，目前建議直接使用 Claude 的 `search_web` 作為主要方案。MCP Server 提供架構與指引。
-
----
-
-## 📚 相關文件
-
-- `references/claude_automation_guide.md` - Claude 自動化指引（**重要**）
-- `examples/market_analysis_data.md` - 市場數據來源指引
-- `data/industry_statistics_*.json` - 本地數據資料庫
-
----
-
-## 🤝 貢獻
-
-歡迎貢獻！特別是：
-- 新增產業數據來源
-- 改進數據格式化
-- 優化查詢邏輯
-
----
-
-## 📄 授權
-
-MIT License
-
-
-混合式市場數據查詢服務，整合台灣官方與法人機構數據來源。
-
-## 功能
-
-### 數據來源
-
-| 來源 | 類型 | 說明 |
-|------|------|------|
-| 經濟部統計處 | Web Search | 官方產業統計數據 |
-| 工研院 IEK | Web Search | 產業趨勢報告 |
-| 資策會 MIC | Web Search | 資通訊產業數據 |
-
-### 可用工具
-
-1. **get_industry_market_data**
-   - 查詢特定產業的市場數據
-   - 自動整合多個來源
-   - 參數：產業別、關鍵字、年份
-
-2. **search_moea_statistics**
-   - 直接查詢經濟部統計處
-   - 參數：查詢關鍵字
+1. 保存章節
+2. 匯出 Word
+3. 取得全部已保存章節
 
 ## 安裝
 
+### 用 `uv`
+
 ```bash
 cd /Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server
-
-# 使用 uv 安裝（推薦）
 uv pip install -e .
+```
 
-# 或使用 pip
+### 用 `pip`
+
+```bash
+cd /Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server
 pip install -e .
 ```
 
-## 設定 Claude Desktop
+## 啟動
 
-編輯 Claude Desktop 設定檔：
+### 方式一：直接跑 server.py
 
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+```bash
+cd /Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server
+uv run server.py
+```
+
+### 方式二：跑 script entry
+
+```bash
+cd /Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server
+uv run sbir-data-server
+```
+
+### 本機開發測試
+
+```bash
+cd /Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server
+python server.py
+```
+
+若要用 MCP Inspector：
+
+```bash
+cd /Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server
+npx @modelcontextprotocol/inspector uv --directory . run server.py
+```
+
+## Claude Desktop / Claude Code 設定
+
+建議的 stdio MCP 設定：
 
 ```json
 {
@@ -298,87 +169,64 @@ pip install -e .
 }
 ```
 
-## 使用範例
+更完整設定說明：
 
-設定完成後，在 Claude 中：
+- [/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/CLAUDE_CODE_MCP_SETUP.md](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/CLAUDE_CODE_MCP_SETUP.md)
 
-```
-用戶：「我要寫機械產業的問題陳述，請幫我找市場數據」
+## 對 SaaS 的對齊狀態
 
-Claude 自動執行：
-1. 呼叫 get_industry_market_data(industry="機械", keyword="市場規模")
-2. 整合經濟部統計處、工研院 IEK 數據
-3. 格式化為可引用的段落
+目前已對齊：
 
-Claude 回應：
-「根據工研院 IEK (2024) 報告，台灣機械產業市場規模達 XX 億元...
-根據經濟部統計處，2024 年機械產業產值...」
-```
+1. 關鍵題目定義
+2. 部分 deterministic 正規化與補強規則
+3. `enrich_answer` 的關鍵輸入案例
 
-## 目前狀態
+目前還沒對齊成同一套執行環境的部分：
 
-⚠️ **注意**：目前版本為架構雛形，Web Search 功能需要進一步實作。
+1. `SaaS` 的單題落庫 / completion engine
+2. `SaaS` 的候選答案與確認流
+3. `SaaS` 的 planner-driven UI
 
-### 待完成項目
+也就是：
 
-- [ ] 整合 Google Custom Search API
-- [ ] 實作 Web Scraping（遵守 robots.txt）
-- [ ] 或整合 Claude 的 search_web 工具
-- [ ] 快取機制（避免重複查詢）
-- [ ] 錯誤處理與重試邏輯
+- `Skill / MCP`：知識與工具導向
+- `SaaS`：產品流程導向
 
-### 實作選項
+## 驗證
 
-**選項 A：使用 Google Custom Search API**
-```python
-# 需要 Google API Key
-GOOGLE_API_KEY = "your-api-key"
-SEARCH_ENGINE_ID = "your-search-engine-id"
+對齊檢查腳本：
 
-async def web_search(query: str):
-    url = f"https://www.googleapis.com/customsearch/v1"
-    params = {
-        "key": GOOGLE_API_KEY,
-        "cx": SEARCH_ENGINE_ID,
-        "q": query
-    }
-    # ...
-```
+- [test_saas_alignment.py](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server/test_saas_alignment.py)
 
-**選項 B：使用 Claude 的 search_web**
-```python
-# 透過 MCP 呼叫 Claude 的 search_web 工具
-# 需要研究 MCP 的 tool-to-tool 呼叫機制
-```
-
-**選項 C：Web Scraping**
-```python
-from playwright.async_api import async_playwright
-
-async def scrape_iek(industry: str, keyword: str):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        # ...
-```
-
-## 開發指引
-
-### 測試 Server
+可直接跑：
 
 ```bash
-# 直接執行測試
-python server.py
-
-# 或使用 MCP Inspector
-npx @modelcontextprotocol/inspector uv --directory . run server.py
+python3 /Users/backtrue/Documents/claude-sbir-skills/sbir-grants/mcp-server/test_saas_alignment.py
 ```
 
-### 新增數據來源
+若輸出：
 
-1. 在 `server.py` 新增查詢函數
-2. 在 `get_industry_market_data` 中整合
-3. 更新 `format_market_data` 格式化邏輯
+```text
+skill-saas-alignment: PASS
+```
 
-## 授權
+代表關鍵題目規則仍與 SaaS 同步。
 
-MIT License
+## 相關文件
+
+1. [/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/README.md](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/README.md)
+2. [/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/CODEX_SETUP.md](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/CODEX_SETUP.md)
+3. [/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/CLAUDE_CODE_MCP_SETUP.md](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/CLAUDE_CODE_MCP_SETUP.md)
+4. [/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/proposal_generator/USAGE.md](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/proposal_generator/USAGE.md)
+5. [/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/SAAS.md](/Users/backtrue/Documents/claude-sbir-skills/sbir-grants/SAAS.md)
+
+## 外部依據
+
+1. Anthropic Claude Code MCP  
+   [https://docs.anthropic.com/en/docs/claude-code/mcp](https://docs.anthropic.com/en/docs/claude-code/mcp)
+
+2. Anthropic Claude Code Slash Commands  
+   [https://docs.anthropic.com/en/docs/claude-code/slash-commands](https://docs.anthropic.com/en/docs/claude-code/slash-commands)
+
+3. OpenAI Skills repository  
+   [https://github.com/openai/skills](https://github.com/openai/skills)
