@@ -499,6 +499,10 @@ async def list_tools() -> list[Tool]:
                     "question_text": {
                         "type": "string",
                         "description": "問題原文（可選，用於顯示）"
+                    },
+                    "context": {
+                        "type": "object",
+                        "description": "目前已收集到的其他答案，可選。用於 team_experience、經費與營收等題目的輔助整理。"
                     }
                 },
                 "required": ["question_id", "user_answer"]
@@ -580,7 +584,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         res = await MCP_enrich_answer(
             arguments["question_id"],
             arguments["user_answer"],
-            arguments.get("question_text", "")
+            arguments.get("question_text", ""),
+            arguments.get("context")
         )
         return [TextContent(type="text", text=res)]
     elif name == "check_proposal_quality":

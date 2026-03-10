@@ -10,6 +10,8 @@ interface SectionCardProps {
     initialContent?: string;
     initialStatus?: string;
     onGenerateComplete?: () => void;
+    generationBlocked?: boolean;
+    generationBlockedReason?: string;
     // Callback to let parent register the trigger function
     onRegisterTrigger: (triggerFn: () => void) => void;
 }
@@ -34,6 +36,8 @@ export default function SectionCard({
     initialContent = '',
     initialStatus = 'empty',
     onGenerateComplete,
+    generationBlocked = false,
+    generationBlockedReason,
     onRegisterTrigger
 }: SectionCardProps) {
     const [content, setContent] = useState(initialContent);
@@ -55,6 +59,10 @@ export default function SectionCard({
 
     const handleGenerate = useCallback(async () => {
         if (generating) return;
+        if (generationBlocked) {
+            alert(generationBlockedReason || '專案資料尚未完成，暫時無法生成這個章節。');
+            return;
+        }
         setGenerating(true);
         setStatus('generating');
         setContent(''); // Build from scratch
@@ -131,7 +139,7 @@ export default function SectionCard({
         } finally {
             setGenerating(false);
         }
-    }, [generating, onGenerateComplete, projectId, sectionIndex]);
+    }, [generating, generationBlocked, generationBlockedReason, onGenerateComplete, projectId, sectionIndex]);
 
     const handleRefine = async () => {
         if (refining || !refinePrompt.trim()) return;
@@ -274,14 +282,12 @@ export default function SectionCard({
         if (!reviewData) return;
         const edit = reviewData.Edits[editIndex];
 
-        let newContent = content;
-        if (content.includes(edit.original_text)) {
-            newContent = content.replace(edit.original_text, edit.revised_text);
-        } else {
-            // Very simple fallback if exact match not found (LLMs sometimes paraphrase original slightly)
-            alert('無法完全比對原文，將盡可能取代。請檢查內容與格式。');
-            newContent = newContent + `\n\n【建議加入】：\n${edit.revised_text}`;
+        if (!content.includes(edit.original_text)) {
+            alert('無法精準比對原文，這筆建議尚未套用。請先檢查原文內容或重新產生審閱建議。');
+            return;
         }
+
+        const newContent = content.replace(edit.original_text, edit.revised_text);
 
         setContent(newContent);
 
@@ -336,8 +342,9 @@ export default function SectionCard({
                     )}
                     <button
                         onClick={handleGenerate}
-                        disabled={generating || refining || isEditing}
+                        disabled={generating || refining || isEditing || generationBlocked}
                         className="px-4 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition flex items-center gap-2 disabled:opacity-50"
+                        title={generationBlocked ? (generationBlockedReason || '專案資料尚未完成，暫時無法生成。') : undefined}
                     >
                         {generating && !refining ? <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" /> : <Sparkles className="w-3.5 h-3.5 text-amber-500" />}
                         {content ? '重新生成' : '開始撰寫'}

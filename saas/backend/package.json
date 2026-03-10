@@ -5,6 +5,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "regression:project-data": "npx tsx scripts/project-data-regression.ts",
+    "cleanup:project-progress-data": "node scripts/cleanup_project_progress_data.mjs",
     "export:company-leads": "bash scripts/export_company_leads.sh",
     "report:company-leads": "node scripts/company_leads_report.mjs"
   },

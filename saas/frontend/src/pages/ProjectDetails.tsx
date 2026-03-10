@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useLocation } from 'react-router-dom';
 import { ChevronLeft, Upload, FileText, Trash2, Download, AlertCircle, RefreshCw, Layers, CheckSquare, Sparkles, PlayCircle, Loader2 } from 'lucide-react';
 import axios from 'axios';
 import AIInterviewer from '../components/AIInterviewer';
@@ -72,12 +72,101 @@ function normalizeProjectPayload(payload: unknown): Project | null {
     return null;
 }
 
+interface QuestionStatusItem {
+    id: string;
+    category: string;
+    question: string;
+    active: boolean;
+    status: 'missing' | 'partial' | 'confirmed';
+    answer: string;
+    reason?: string;
+    completion_hint?: string;
+    answer_source?: string;
+    confirmed_by_user?: boolean;
+    confirmed_at?: string | null;
+    raw_answer?: string | null;
+    candidate_text?: string;
+    candidate_source?: string;
+    candidate_confidence?: number | null;
+    candidate_reason?: string | null;
+    candidate_source_detail?: string | null;
+    official_option?: { code: string; name: string } | null;
+}
+
+interface ProjectDataStatus {
+    total_questions: number;
+    active_questions: number;
+    confirmed_count: number;
+    partial_count: number;
+    missing_count: number;
+    ready: boolean;
+    next_question_id: string | null;
+    next_action: 'complete_question' | 'review_candidate' | 'ready_for_draft';
+    next_prompt: string | null;
+    missing_question_ids: string[];
+    partial_question_ids: string[];
+    candidate_question_ids: string[];
+    derived_project_type?: {
+        value: string;
+        rationale: string;
+    } | null;
+    industry_resolution?: {
+        raw_input: string | null;
+        official_industry_code: string | null;
+        official_industry_name: string | null;
+        industry_source: string | null;
+    } | null;
+    items: QuestionStatusItem[];
+}
+
+const getStatusLabel = (status: 'missing' | 'partial' | 'confirmed') => {
+    switch (status) {
+        case 'confirmed':
+            return '已確認';
+        case 'partial':
+            return '待補強';
+        case 'missing':
+            return '尚未填寫';
+        default:
+            return status;
+    }
+}
+
+const getAnswerSourceLabel = (source?: string) => {
+    switch (source) {
+        case 'user':
+            return '使用者';
+        case 'candidate_adopted':
+            return '採納候選';
+        case 'enrich_confirmed':
+            return '顧問補寫確認';
+        default:
+            return source || '未知';
+    }
+}
+
+const getCandidateSourceLabel = (source?: string) => {
+    switch (source) {
+        case 'extract':
+            return '內容萃取';
+        case 'enrich':
+            return '顧問補寫';
+        case 'g0v':
+            return '公司資料';
+        default:
+            return source || '候選';
+    }
+}
+
 export default function ProjectDetails() {
     const { id } = useParams<{ id: string }>();
+    const location = useLocation();
     const [project, setProject] = useState<Project | null>(null);
     const [documents, setDocuments] = useState<Document[]>([]);
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
+    const [projectDataStatus, setProjectDataStatus] = useState<ProjectDataStatus | null>(null);
+    const [focusedQuestionId, setFocusedQuestionId] = useState<string | null>(null);
 
     // Tab State
     const [activeTab, setActiveTab] = useState<'overview' | 'data' | 'draft' | 'checklists'>('overview');
@@ -152,6 +241,17 @@ export default function ProjectDetails() {
         } catch { return []; }
     }, [id]);
 
+    const fetchProjectDataStatus = useCallback(async () => {
+        try {
+            const { data } = await axios.get(`${API_BASE}/projects/${id}/project-data-status`);
+            setProjectDataStatus(data);
+            return data as ProjectDataStatus;
+        } catch (e) {
+            console.error('Failed to fetch project data status', e);
+            return null;
+        }
+    }, [id]);
+
     const fetchDocChunks = async (docId: string) => {
         if (docChunks[docId]) return; // already loaded
         try {
@@ -188,16 +288,17 @@ export default function ProjectDetails() {
             const [projRes, docsRes, sectionsRes] = await Promise.all([
                 axios.get(`${API_BASE}/projects/${id}`),
                 axios.get(`${API_BASE}/storage/project/${id}`),
-                axios.get(`${API_BASE}/projects/${id}/sections`)
+                axios.get(`${API_BASE}/projects/${id}/sections`),
             ]);
-                        const normalizedProject = normalizeProjectPayload(projRes.data);
+            const normalizedProject = normalizeProjectPayload(projRes.data);
             const normalizedSections = normalizeArrayPayload<Section>(sectionsRes.data, ['sections']);
             const normalizedDocuments = normalizeArrayPayload<Document>(docsRes.data, ['documents']);
             setProject(normalizedProject ? { ...normalizedProject, sections: normalizedSections } : null);
             setDocuments(normalizedDocuments);
+            await fetchProjectDataStatus();
             try {
                 if (normalizedProject?.progress_data) {
-                                        const parsed = JSON.parse(normalizedProject.progress_data);
+                    const parsed = JSON.parse(normalizedProject.progress_data);
                     // Checklist data is stored under `checklists` key
                     setChecklistData(parsed.checklists || {});
                 }
@@ -207,7 +308,7 @@ export default function ProjectDetails() {
         } finally {
             setLoading(false);
         }
-    }, [id]);
+    }, [fetchProjectDataStatus, id]);
 
     useEffect(() => {
         fetchProjectData();
@@ -470,6 +571,13 @@ export default function ProjectDetails() {
         );
     }
 
+    const generationBlocked = !!projectDataStatus && !projectDataStatus.ready
+    const showAnswerDebug = new URLSearchParams(location.search).get('debugAnswers') === '1'
+    const blockingItems = projectDataStatus?.items.filter((item) => item.status !== 'confirmed') || []
+    const generationBlockedReason = generationBlocked
+        ? (projectDataStatus?.next_prompt || `專案資料尚未完成，目前還缺 ${projectDataStatus?.missing_count ?? 0} 題、${projectDataStatus?.partial_count ?? 0} 題待補強。`)
+        : ''
+
     if (!project) {
         return (
             <div className="text-center p-24">
@@ -614,35 +722,267 @@ export default function ProjectDetails() {
 
                     {/* Data Entry Tab */}
                     {activeTab === 'data' && (
-                        <AIInterviewer
-                            initialAnswers={(() => {
-                                try {
-                                    const data = typeof project.progress_data === 'string'
-                                        ? JSON.parse(project.progress_data)
-                                        : (project.progress_data || {});
-                                    return (data as any).wizardAnswers || {};
-                                } catch {
-                                    return {};
-                                }
-                            })()}
-                            onSaveProgress={async (answers) => {
-                                try {
-                                    const parsedData = typeof project.progress_data === 'string'
-                                        ? JSON.parse(project.progress_data)
-                                        : (project.progress_data || {});
-                                    // Store wizard answers under the `wizardAnswers` key to avoid overwriting checklists
-                                    const updatedProgress = { ...parsedData, wizardAnswers: { ...(parsedData.wizardAnswers || {}), ...answers } };
-                                    const { data: updatedProject } = await axios.put(
-                                        `${API_BASE}/projects/${id}`,
-                                        { progress_data: JSON.stringify(updatedProgress) }
-                                    );
-                                    setProject(updatedProject);
-                                } catch (e) {
-                                    console.error('Failed to save interviewer progress', e);
-                                    throw e;
-                                }
-                            }}
-                        />
+                        <div className="space-y-4">
+                            <AIInterviewer
+                                initialAnswers={(() => {
+                                    try {
+                                        const data = typeof project.progress_data === 'string'
+                                            ? JSON.parse(project.progress_data)
+                                            : (project.progress_data || {});
+                                        return (data as any).answer_map || {};
+                                    } catch {
+                                        return {};
+                                    }
+                                })()}
+                                initialSuggestions={(() => {
+                                    try {
+                                        const data = typeof project.progress_data === 'string'
+                                            ? JSON.parse(project.progress_data)
+                                            : (project.progress_data || {});
+                                        return (data as any).answer_candidates || {};
+                                    } catch {
+                                        return {};
+                                    }
+                                })()}
+                                initialSuggestionMeta={(() => {
+                                    try {
+                                        const data = typeof project.progress_data === 'string'
+                                            ? JSON.parse(project.progress_data)
+                                            : (project.progress_data || {});
+                                        return (data as any).answer_candidate_meta || {};
+                                    } catch {
+                                        return {};
+                                    }
+                                })()}
+                                focusQuestionId={focusedQuestionId}
+                                onSaveProgress={async (answerPatch, options) => {
+                                    try {
+                                        const [questionId, answerValue] = Object.entries(answerPatch)[0] || [];
+                                        if (!questionId) {
+                                            throw new Error('Missing question patch');
+                                        }
+                                        const { data } = await axios.patch(
+                                            `${API_BASE}/projects/${id}/answers/${questionId}`,
+                                            { answer: answerValue, source: options?.source || 'user' }
+                                        );
+                                        const parsedData = typeof project.progress_data === 'string'
+                                            ? JSON.parse(project.progress_data)
+                                            : (project.progress_data || {});
+                                        const nextLocalProgress = {
+                                            ...parsedData,
+                                            answer_map: data.answer_map || {},
+                                        };
+                                        const updatedProject = {
+                                            ...project,
+                                            progress_data: JSON.stringify(nextLocalProgress),
+                                        };
+                                        setProject({
+                                            ...updatedProject,
+                                        });
+                                        const latestStatus = await fetchProjectDataStatus();
+                                        return {
+                                            raw_input: data.raw_input,
+                                            answer_text: data.answer_text,
+                                            answer_source: data.answer_source,
+                                            normalized: data.normalized,
+                                            resolution_note: data.resolution_note,
+                                            answer_map: data.answer_map || {},
+                                            ...(latestStatus || {}),
+                                        };
+                                    } catch (e) {
+                                        console.error('Failed to save interviewer progress', e);
+                                        throw e;
+                                    }
+                                }}
+                                onSaveCandidates={async (candidatePatch) => {
+                                    try {
+                                        const { data } = await axios.patch(
+                                            `${API_BASE}/projects/${id}/answer-candidates`,
+                                            { candidates: candidatePatch }
+                                        );
+                                        const parsedData = typeof project.progress_data === 'string'
+                                            ? JSON.parse(project.progress_data)
+                                            : (project.progress_data || {});
+                                        const nextLocalProgress = {
+                                            ...parsedData,
+                                            answer_candidates: data.answer_candidates || {},
+                                            answer_candidate_meta: data.answer_candidate_meta || {},
+                                        };
+                                        setProject({
+                                            ...project,
+                                            progress_data: JSON.stringify(nextLocalProgress),
+                                        });
+                                        return {
+                                            answer_candidates: data.answer_candidates || {},
+                                            answer_candidate_meta: data.answer_candidate_meta || {},
+                                        };
+                                    } catch (e) {
+                                        console.error('Failed to save answer candidates', e);
+                                        throw e;
+                                    }
+                                }}
+                                completionSummary={projectDataStatus}
+                            />
+
+                            {projectDataStatus && (
+                                <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <h3 className="text-sm font-semibold text-slate-900">29 題完成盤點</h3>
+                                            <p className="text-xs text-slate-500 mt-1">正式答案、候選答案與待補缺口都以資料庫狀態為準。</p>
+                                        </div>
+                                        <div className="text-xs text-slate-600">
+                                            已確認 {projectDataStatus.confirmed_count} / {projectDataStatus.total_questions}
+                                        </div>
+                                    </div>
+                                    <div className="grid gap-3 md:grid-cols-3">
+                                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                                            <div className="text-xs font-semibold text-emerald-700">已確認</div>
+                                            <div className="mt-1 text-2xl font-semibold text-emerald-900">{projectDataStatus.confirmed_count}</div>
+                                        </div>
+                                        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                                            <div className="text-xs font-semibold text-amber-700">待補強</div>
+                                            <div className="mt-1 text-2xl font-semibold text-amber-900">{projectDataStatus.partial_count}</div>
+                                        </div>
+                                        <div className="rounded-xl border border-rose-200 bg-rose-50 p-3">
+                                            <div className="text-xs font-semibold text-rose-700">尚未填寫</div>
+                                            <div className="mt-1 text-2xl font-semibold text-rose-900">{projectDataStatus.missing_count}</div>
+                                        </div>
+                                    </div>
+                                    {(projectDataStatus.derived_project_type || projectDataStatus.industry_resolution) && (
+                                        <div className="grid gap-3 md:grid-cols-2">
+                                            {projectDataStatus.derived_project_type && (
+                                                <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3">
+                                                    <div className="text-xs font-semibold text-indigo-700">系統推定專案型態</div>
+                                                    <div className="mt-1 text-sm font-semibold text-indigo-900">{projectDataStatus.derived_project_type.value}</div>
+                                                    <div className="mt-1 text-xs text-indigo-800 whitespace-pre-wrap">{projectDataStatus.derived_project_type.rationale}</div>
+                                                </div>
+                                            )}
+                                            {projectDataStatus.industry_resolution && (
+                                                <div className="rounded-xl border border-sky-200 bg-sky-50 p-3">
+                                                    <div className="text-xs font-semibold text-sky-700">產業分類對應</div>
+                                                    <div className="mt-1 text-sm font-semibold text-sky-900">
+                                                        {projectDataStatus.industry_resolution.official_industry_code
+                                                            ? `${projectDataStatus.industry_resolution.official_industry_code} ${projectDataStatus.industry_resolution.official_industry_name}`
+                                                            : '尚未整理'}
+                                                    </div>
+                                                    {projectDataStatus.industry_resolution.raw_input && (
+                                                        <div className="mt-1 text-xs text-sky-800 whitespace-pre-wrap">
+                                                            原始輸入：{projectDataStatus.industry_resolution.raw_input}
+                                                        </div>
+                                                    )}
+                                                    {projectDataStatus.industry_resolution.industry_source && (
+                                                        <div className="mt-1 text-xs text-sky-700">
+                                                            來源：{getAnswerSourceLabel(projectDataStatus.industry_resolution.industry_source)}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                    <div className="space-y-2">
+                                        {projectDataStatus.items.filter((item) => item.active).map((item) => (
+                                            <button
+                                                key={item.id}
+                                                type="button"
+                                                onClick={() => setFocusedQuestionId(item.id)}
+                                                className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-left hover:bg-slate-100 transition"
+                                            >
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <span className="text-xs font-semibold text-indigo-700">{item.category}</span>
+                                                    <span className={`text-[11px] px-2 py-0.5 rounded-full ${
+                                                        item.status === 'confirmed'
+                                                            ? 'bg-emerald-100 text-emerald-800'
+                                                            : item.status === 'partial'
+                                                                ? 'bg-amber-100 text-amber-800'
+                                                                : 'bg-rose-100 text-rose-800'
+                                                    }`}>
+                                                        {getStatusLabel(item.status)}
+                                                    </span>
+                                                    {item.answer_source && (
+                                                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+                                                            來源：{getAnswerSourceLabel(item.answer_source)}
+                                                        </span>
+                                                    )}
+                                                    {item.candidate_source && item.status !== 'confirmed' && (
+                                                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                                                            候選：{getCandidateSourceLabel(item.candidate_source)}
+                                                            {typeof item.candidate_confidence === 'number' ? ` ${Math.round(item.candidate_confidence * 100)}%` : ''}
+                                                        </span>
+                                                    )}
+                                                    {item.official_option && (
+                                                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-sky-100 text-sky-700">
+                                                            官方分類：{item.official_option.code}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="mt-2 text-sm font-medium text-slate-900">{item.question}</div>
+                                                {item.answer && (
+                                                    <div className="mt-2 text-xs text-slate-600 whitespace-pre-wrap">
+                                                        正式答案：{item.answer}
+                                                    </div>
+                                                )}
+                                                {item.raw_answer && item.raw_answer !== item.answer && (
+                                                    <div className="mt-1 text-xs text-slate-500 whitespace-pre-wrap">
+                                                        原始輸入：{item.raw_answer}
+                                                    </div>
+                                                )}
+                                                {item.candidate_text && item.status !== 'confirmed' && (
+                                                    <div className="mt-1 text-xs text-indigo-700 whitespace-pre-wrap">
+                                                        候選答案：{item.candidate_text}
+                                                    </div>
+                                                )}
+                                                {(item.completion_hint || item.candidate_reason) && (
+                                                    <div className="mt-2 text-xs text-slate-500">
+                                                        {item.candidate_reason || item.completion_hint}
+                                                    </div>
+                                                )}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {showAnswerDebug && projectDataStatus && (
+                                <div className="bg-slate-950 text-slate-100 rounded-xl border border-slate-800 p-4 shadow-sm space-y-3">
+                                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">
+                                        內部答案除錯
+                                    </div>
+                                    <div className="text-xs text-slate-400">
+                                        只在 `?debugAnswers=1` 顯示。用來檢查每題目前是人填、候選採納，還是尚未確認。
+                                    </div>
+                                    <div className="space-y-2">
+                                        {projectDataStatus.items.filter((item) => item.active).map((item) => (
+                                            <div key={item.id} className="rounded-lg border border-slate-800 bg-slate-900/70 p-3">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <span className="text-[11px] font-semibold text-emerald-300">{item.category}</span>
+                                                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-200">{getStatusLabel(item.status)}</span>
+                                                    {item.answer_source && (
+                                                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-900/60 text-indigo-200">
+                                                            來源：{getAnswerSourceLabel(item.answer_source)}
+                                                        </span>
+                                                    )}
+                                                    {item.confirmed_by_user !== undefined && (
+                                                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">
+                                                            使用者確認：{item.confirmed_by_user ? '是' : '否'}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="mt-2 text-xs text-slate-300">{item.question}</div>
+                                                {item.completion_hint && item.status !== 'confirmed' && (
+                                                    <div className="mt-2 text-xs text-amber-300">{item.completion_hint}</div>
+                                                )}
+                                                {item.answer && (
+                                                    <div className="mt-2 text-xs text-slate-400 whitespace-pre-wrap">
+                                                        {item.answer}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     )}
 
                     {/* AI Draft Tab */}
@@ -669,6 +1009,10 @@ export default function ProjectDetails() {
                                     <button
                                         onClick={async () => {
                                             if (generatingQueue) return;
+                                            if (generationBlocked) {
+                                                setActiveTab('data');
+                                                return;
+                                            }
                                             if (!window.confirm('確定要生成所有章節嗎？這將會花費數分鐘時間。')) return;
                                             setGeneratingQueue(true);
                                             try {
@@ -689,7 +1033,7 @@ export default function ProjectDetails() {
                                                 setGeneratingQueue(false);
                                             }
                                         }}
-                                        disabled={generatingQueue || project.chunking_status === 'syncing'}
+                                        disabled={generatingQueue || project.chunking_status === 'syncing' || generationBlocked}
                                         className="px-5 py-2.5 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition flex items-center gap-2 shadow-sm disabled:opacity-50"
                                     >
                                         {generatingQueue ? <RefreshCw className="w-4 h-4 animate-spin" /> : <PlayCircle className="w-4 h-4" />}
@@ -702,6 +1046,33 @@ export default function ProjectDetails() {
                                 <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-lg text-sm text-indigo-700 flex items-center gap-2">
                                     <RefreshCw className="w-4 h-4 animate-spin" />
                                     AI 正在分析並切塊您的專案資料。請在生成草稿前稍候。
+                                </div>
+                            )}
+
+                            {generationBlocked && (
+                                <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800 space-y-2">
+                                    <div className="font-medium">專案資料尚未完成，暫時無法生成草稿。</div>
+                                    <div>{generationBlockedReason}</div>
+                                    <div className="text-xs text-amber-700">
+                                        尚待處理：
+                                        {' '}
+                                        {blockingItems.slice(0, 5).map((item) => `${item.category}：${item.question}`).join('、')}
+                                        {blockingItems.length > 5 ? ` 等 ${blockingItems.length} 題` : ''}
+                                    </div>
+                                    {projectDataStatus?.next_question_id && (
+                                        <div className="text-xs text-amber-700">
+                                            建議下一步：先回到專案資料，處理
+                                            {' '}
+                                            {blockingItems.find((item) => item.id === projectDataStatus.next_question_id)?.category || '下一題'}
+                                            。
+                                        </div>
+                                    )}
+                                    <button
+                                        onClick={() => setActiveTab('data')}
+                                        className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 transition"
+                                    >
+                                        回到專案資料繼續補齊
+                                    </button>
                                 </div>
                             )}
 
@@ -720,6 +1091,8 @@ export default function ProjectDetails() {
                                                 // Optionally, fetch project data to sync
                                                 console.log(`Section ${index} generator complete`);
                                             }}
+                                            generationBlocked={generationBlocked}
+                                            generationBlockedReason={generationBlockedReason}
                                             onRegisterTrigger={(triggerFn) => {
                                                 sectionTriggerRefs.current[index] = triggerFn;
                                             }}

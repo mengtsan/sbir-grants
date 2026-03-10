@@ -10,6 +10,7 @@ export interface BudgetLimit {
 }
 
 import rules from '../../../../shared_domain/financial_rules.json';
+import { mapIndustryToBenchmarkBucket, normalizeOfficialIndustry } from './industry_classification';
 
 export const PHASE_LIMITS: Record<PhaseType, BudgetLimit> = rules.phase_limits as any;
 
@@ -119,6 +120,7 @@ const INDUSTRY_ROAS_BENCHMARKS: Record<string, { min: number; recommended: numbe
 export interface ROIResult {
     subsidyAmount: number;
     industry: string;
+    benchmarkIndustry: string;
     phase: PhaseType;
     yearlyBreakdown: Array<{ year: number; recommended: number }>;
     targetRevenue: number;
@@ -126,8 +128,48 @@ export interface ROIResult {
     notes: string[];
 }
 
+export interface ProjectTypeInference {
+    projectType: ProjectType;
+    rationale: string;
+}
+
+export function inferProjectTypeFromAnswers(answers?: Record<string, unknown>): ProjectTypeInference {
+    const industry = normalizeOfficialIndustry(String(answers?.industry || '')) || String(answers?.industry || '')
+    const solutionDescription = String(answers?.solution_description || '')
+    const businessModel = String(answers?.business_model || '')
+    const joined = `${industry} ${solutionDescription} ${businessModel}`
+
+    if (/硬體|感測|設備|機台|器材|模組|晶片|電子|製造/u.test(joined)) {
+        return {
+            projectType: '硬體開發',
+            rationale: '已依產業與解決方案描述判定本案偏向硬體／設備型開發。'
+        }
+    }
+
+    if (/資通訊|軟體|SaaS|AI|系統|平台|雲端|資料庫|網站|app|App/u.test(joined)) {
+        return {
+            projectType: '軟體開發',
+            rationale: '已依產業與解決方案描述判定本案偏向軟體／平台型開發。'
+        }
+    }
+
+    if (/服務|顧問|流程|體驗|課程|平台服務|代寫|代辦|顧客服務/u.test(joined)) {
+        return {
+            projectType: '服務創新',
+            rationale: '已依商業模式與解決方案描述判定本案偏向服務創新型專案。'
+        }
+    }
+
+    return {
+        projectType: '技術研發',
+        rationale: '目前依已知資料先保守歸類為技術研發型專案。'
+    }
+}
+
 export function calculateROI(subsidyAmount: number, phase: PhaseType = 'phase1', industry: string = '製造業', companyRevenue: number = 0): ROIResult {
-    const benchmark = INDUSTRY_ROAS_BENCHMARKS[industry] || INDUSTRY_ROAS_BENCHMARKS['製造業'];
+    const canonicalIndustry = normalizeOfficialIndustry(industry) || industry;
+    const benchmarkIndustry = mapIndustryToBenchmarkBucket(canonicalIndustry);
+    const benchmark = INDUSTRY_ROAS_BENCHMARKS[benchmarkIndustry] || INDUSTRY_ROAS_BENCHMARKS['製造業'];
 
     let adjustmentFactor = 1.0;
     if (subsidyAmount >= 600) {
@@ -154,8 +196,8 @@ export function calculateROI(subsidyAmount: number, phase: PhaseType = 'phase1',
     if (subsidyAmount >= 600) notes.push("大型計畫（≥600萬），ROAS 基準下調 20%");
     else if (subsidyAmount >= 300) notes.push("中型計畫（300-600萬），ROAS 基準下調 10%");
 
-    if (['資通訊', '軟體', '數位服務'].includes(industry)) notes.push("軟體/數位產業，期待較高 ROAS（5-10 倍）");
-    else if (['生技/醫療'].includes(industry)) notes.push("生技產業，考慮研發風險，可接受較低 ROAS");
+    if (benchmarkIndustry === '資通訊') notes.push("資通訊/數位產業，期待較高 ROAS（5-10 倍）");
+    else if (benchmarkIndustry === '生技/醫療') notes.push("醫療保健相關產業，考慮研發風險，可接受較低 ROAS");
 
     if (companyRevenue > 0) {
         if (companyRevenue < 1000) notes.push("新創公司，可適度降低 ROAS 要求");
@@ -164,7 +206,8 @@ export function calculateROI(subsidyAmount: number, phase: PhaseType = 'phase1',
 
     return {
         subsidyAmount,
-        industry,
+        industry: canonicalIndustry,
+        benchmarkIndustry,
         phase,
         yearlyBreakdown,
         targetRevenue: Math.round(recommendedRevenue * 10) / 10,
@@ -177,6 +220,7 @@ export function formatROIAsMarkdown(result: ROIResult): string {
     let output = `## 📈 預期效益與 ROI (系統自動估算)\n\n`;
     output += `- 補助金額：**${result.subsidyAmount} 萬元**\n`;
     output += `- 產業別：**${result.industry}**\n`;
+    output += `- 系統採用基準：**${result.benchmarkIndustry}**\n`;
     output += `- 計畫期間：**${result.phase.toUpperCase()}**\n\n`;
 
     output += `### 系統建議產值目標\n\n`;

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { AlertCircle, Loader2, Rocket, ShieldCheck } from 'lucide-react';
@@ -7,6 +8,9 @@ const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '';
 const TURNSTILE_SCRIPT_ID = 'cf-turnstile-script';
 const TURNSTILE_SCRIPT_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+const TURNSTILE_SUCCESS_CALLBACK = '__sbirTurnstileSuccess';
+const TURNSTILE_ERROR_CALLBACK = '__sbirTurnstileError';
+const TURNSTILE_EXPIRED_CALLBACK = '__sbirTurnstileExpired';
 
 const ERROR_MESSAGES: Record<string, string> = {
     TURNSTILE_NOT_CONFIGURED: 'Cloudflare Turnstile 尚未設定完成。',
@@ -21,9 +25,12 @@ export default function Login() {
     const { user, isLoading } = useAuth();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
+    const formRef = useRef<HTMLFormElement | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isScriptReady, setIsScriptReady] = useState(false);
     const [scriptError, setScriptError] = useState<string | null>(null);
+    const [turnstileToken, setTurnstileToken] = useState('');
+    const [turnstileStatusMessage, setTurnstileStatusMessage] = useState<string | null>(null);
 
     useEffect(() => {
         if (!isLoading && user) {
@@ -72,15 +79,63 @@ export default function Login() {
         };
     }, []);
 
+    useEffect(() => {
+        if (!TURNSTILE_SITE_KEY) {
+            return;
+        }
+
+        type TurnstileCallbackWindow = Window & {
+            [TURNSTILE_SUCCESS_CALLBACK]?: (token: string) => void;
+            [TURNSTILE_ERROR_CALLBACK]?: (error?: string) => void;
+            [TURNSTILE_EXPIRED_CALLBACK]?: () => void;
+        };
+
+        const callbackWindow = window as TurnstileCallbackWindow;
+        callbackWindow[TURNSTILE_SUCCESS_CALLBACK] = (token: string) => {
+            setTurnstileToken(token);
+            setTurnstileStatusMessage(null);
+            setScriptError(null);
+        };
+        callbackWindow[TURNSTILE_ERROR_CALLBACK] = () => {
+            setTurnstileToken('');
+            setTurnstileStatusMessage('Cloudflare 人機驗證載入失敗，請稍後再試。');
+            setIsSubmitting(false);
+        };
+        callbackWindow[TURNSTILE_EXPIRED_CALLBACK] = () => {
+            setTurnstileToken('');
+            setTurnstileStatusMessage('Cloudflare 驗證已過期，請稍候重新完成驗證。');
+            setIsSubmitting(false);
+        };
+
+        return () => {
+            delete callbackWindow[TURNSTILE_SUCCESS_CALLBACK];
+            delete callbackWindow[TURNSTILE_ERROR_CALLBACK];
+            delete callbackWindow[TURNSTILE_EXPIRED_CALLBACK];
+        };
+    }, []);
+
     const errorMessage = useMemo(() => {
         const code = searchParams.get('error');
         if (!code) {
-            return scriptError;
+            return turnstileStatusMessage || scriptError;
         }
         return ERROR_MESSAGES[code] || '登入過程發生錯誤，請稍後再試。';
-    }, [searchParams, scriptError]);
+    }, [searchParams, scriptError, turnstileStatusMessage]);
 
-    const handleSubmit = () => {
+    const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+        const form = formRef.current;
+        const tokenField = form?.querySelector<HTMLInputElement>('input[name="cf-turnstile-response"]');
+        const token = tokenField?.value?.trim() || turnstileToken.trim();
+
+        if (!token) {
+            event.preventDefault();
+            setIsSubmitting(false);
+            setTurnstileStatusMessage('請先完成人機驗證再登入。');
+            return;
+        }
+
+        setTurnstileToken(token);
+        setTurnstileStatusMessage(null);
         setIsSubmitting(true);
     };
 
@@ -103,7 +158,7 @@ export default function Login() {
 
                 <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
                     <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10 border border-slate-200">
-                        <form action={`${API_BASE}/auth/google/precheck`} method="POST" onSubmit={handleSubmit} className="space-y-6">
+                        <form ref={formRef} action={`${API_BASE}/auth/google/precheck`} method="POST" onSubmit={handleSubmit} className="space-y-6">
                             {!TURNSTILE_SITE_KEY ? (
                                 <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -118,9 +173,12 @@ export default function Login() {
                                         data-sitekey={TURNSTILE_SITE_KEY}
                                         data-theme="light"
                                         data-size="flexible"
-                                        data-language="zh-TW"
+                                        data-language="zh-tw"
                                         data-action="google_login"
-                                        data-appearance="interaction-only"
+                                        data-appearance="always"
+                                        data-callback={TURNSTILE_SUCCESS_CALLBACK}
+                                        data-error-callback={TURNSTILE_ERROR_CALLBACK}
+                                        data-expired-callback={TURNSTILE_EXPIRED_CALLBACK}
                                     />
                                 </div>
                             ) : null}
@@ -141,7 +199,7 @@ export default function Login() {
 
                             <button
                                 type="submit"
-                                disabled={isSubmitting || !TURNSTILE_SITE_KEY || !isScriptReady}
+                                disabled={isSubmitting || !TURNSTILE_SITE_KEY || !isScriptReady || !turnstileToken}
                                 className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors"
                             >
                                 {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}

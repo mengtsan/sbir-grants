@@ -6,7 +6,6 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { streamText, generateText } from 'ai'
 import { streamSSE } from 'hono/streaming'
-import { phase1Template } from './templates/sbir_phase1'
 import { PHASE1_CHUNKS } from './templates/phase1_chunks'
 import questionsData from './data/questions.json'
 import { calculateBudget, calculateROI, formatBudgetAsMarkdown, formatROIAsMarkdown, ProjectType } from './utils/calculators'
@@ -16,6 +15,8 @@ import { LOCAL_SBIR_SUCCESS_FACTORS } from './templates/local_sbir_success_facto
 import { getAIProvider } from './utils/ai_provider'
 import { checkAndDeductCredit, CreditError } from './utils/credits'
 import { fetchCompanyLookup } from './utils/company_lookup'
+import { buildProjectAnswerStatusSummary, loadProjectAnswerMap } from './utils/project_answer_status'
+import { mapIndustryToBenchmarkBucket, normalizeOfficialIndustry } from './utils/industry_classification'
 
 const aiApp = new Hono<{ Bindings: Bindings; Variables: Variables }>({ strict: false })
 
@@ -39,6 +40,27 @@ CRITICAL MISSIONS FOR EXCELLENCE:
 
 You always output your breathtaking responses entirely in Traditional Chinese (繁體中文) using well-structured Markdown.`;
 
+const REQUIRED_PITCH_DECK_QUESTION_IDS = questionsData.questions
+    .filter((question: any) => question.required)
+    .map((question: any) => question.id) as string[]
+
+function findMissingAnswers(answerMap: Record<string, string>, requiredQuestionIds: string[]): string[] {
+    return requiredQuestionIds.filter((questionId) => {
+        const value = answerMap[questionId]
+        return typeof value !== 'string' || value.trim() === ''
+    })
+}
+
+function requireNumericAnswer(answerMap: Record<string, string>, questionId: string): number {
+    const rawValue = answerMap[questionId] || ''
+    const numericMatch = rawValue.match(/(\d+(?:\.\d+)?)/)
+    if (!numericMatch) {
+        throw new Error(`SECTION_CALCULATION_INPUT_MISSING:${questionId}`)
+    }
+
+    return parseFloat(numericMatch[1])
+}
+
 // Endpoint to generate a single project section
 aiApp.post('/project/:projectId/section/:sectionIndex/generate', async (c) => {
     const user = c.get('user')
@@ -61,6 +83,15 @@ aiApp.post('/project/:projectId/section/:sectionIndex/generate', async (c) => {
         'INSERT INTO project_sections (project_id, section_index, title, status) VALUES (?, ?, ?, ?) ON CONFLICT(project_id, section_index) DO UPDATE SET status = excluded.status'
     ).bind(projectId, sectionIndex, PHASE1_CHUNKS[sectionIndex].title, 'generating').run();
 
+    const answers = await loadProjectAnswerMap(c.env.DB, projectId)
+    const answerStatus = buildProjectAnswerStatusSummary(answers)
+    if (!answerStatus.ready) {
+        return c.json({
+            error: 'PROJECT_DATA_INCOMPLETE',
+            answer_status: answerStatus,
+        }, 409)
+    }
+
     // 2. Determine AI Provider
     const { provider, apiKey } = await getAIProvider(c, user.sub)
     try {
@@ -69,18 +100,6 @@ aiApp.post('/project/:projectId/section/:sectionIndex/generate', async (c) => {
         if (e.message === 'OUT_OF_CREDITS') return c.json({ error: 'OUT_OF_CREDITS' }, 403)
         if (e.message === 'USER_NOT_FOUND') return c.json({ error: 'User not found' }, 404)
         return c.json({ error: 'Credit check failed' }, 500)
-    }
-
-    // Reconstruct answers from relational DB
-    const answersRes = await c.env.DB.prepare(
-        'SELECT question_id, answer_text FROM project_answers WHERE project_id = ?'
-    ).bind(projectId).all();
-
-    const answers: Record<string, string> = {};
-    if (answersRes.results) {
-        for (const row of answersRes.results) {
-            answers[row.question_id as string] = row.answer_text as string;
-        }
     }
 
     const chunkDef = PHASE1_CHUNKS[sectionIndex];
@@ -121,7 +140,7 @@ aiApp.post('/project/:projectId/section/:sectionIndex/generate', async (c) => {
                     }
                 }
                 if (!hasData) {
-                    chunkContext += "(使用者未提供直接相關資訊，請依上下文合理推估)\n";
+                    throw new Error(`SECTION_GROUND_TRUTH_MISSING:${chunkDef.relevant_question_ids.join(',')}`);
                 }
 
                 // 1b. Real Semantic RAG with Vectorize (Fixing Bug R1: Ghost Vector DB)
@@ -245,12 +264,14 @@ ${diverseItems.map((item, idx) => `[${idx}] ${item.text.substring(0, 200).replac
                 // Inject deterministic financial rules to prevent LLM hallucinations
                 let calculatorContext = "";
                 if (sectionIndex === 2 || sectionIndex === 5 || sectionIndex === 6) {
-                    const budgetTotalStr = answers['budget_total'] || '150';
-                    const match = budgetTotalStr.match(/(\d+)/);
-                    const budgetTotal = match ? parseInt(match[1], 10) : 150;
+                    const budgetTotal = requireNumericAnswer(answers, 'budget_total');
 
                     if (sectionIndex === 6) {
-                        const projectType = answers['industry']?.includes('軟體') ? '軟體開發' : '技術研發';
+                        const normalizedIndustry = normalizeOfficialIndustry(answers['industry'] || '') || answers['industry'] || ''
+                        if (!normalizedIndustry) {
+                            throw new Error('SECTION_CALCULATION_INPUT_MISSING:industry')
+                        }
+                        const projectType = normalizedIndustry.includes('J ') || normalizedIndustry.includes('資通訊') ? '軟體開發' : '技術研發';
                         const budgetRes = calculateBudget(budgetTotal, 'phase1', projectType as ProjectType);
                         calculatorContext += `\n[系統強制財務預算表 (System Forcing)]\n這是一份系統依據法規算出的【絕對正確預算表】。你的 Markdown 輸出必須【完全照抄】此表並融入內文，**絕對不可自行編造數字或擅改科目上限**：\n\n${formatBudgetAsMarkdown(budgetRes)}\n`;
                     }
@@ -258,10 +279,13 @@ ${diverseItems.map((item, idx) => `[${idx}] ${item.text.substring(0, 200).replac
                     if (sectionIndex === 2 || sectionIndex === 5) {
                         const companyRevStr = answers['revenue_last_year'] || '0';
                         const companyRev = parseInt(companyRevStr.replace(/\D/g, '') || '0', 10);
-                        const industry = answers['industry'] || '製造業';
+                        const industry = normalizeOfficialIndustry(answers['industry'] || '') || answers['industry'] || '';
+                        if (!industry) {
+                            throw new Error('SECTION_CALCULATION_INPUT_MISSING:industry')
+                        }
                         const subsidy = Math.min(budgetTotal * 0.5, 150);
                         const roiRes = calculateROI(subsidy, 'phase1', industry, companyRev);
-                        calculatorContext += `\n[系統強制投資報酬率 (System Forcing)]\n這是一份系統套用產業基準公式算出的【標準 ROAS 估算】。你的論述必須**完全死守**這些數字（包含 3年總產值 ${roiRes.targetRevenue}萬、分年營收表、ROAS ${roiRes.targetROAS}倍），絕對不可自行發明其他產值數字！\n\n${formatROIAsMarkdown(roiRes)}\n`;
+                        calculatorContext += `\n[系統強制投資報酬率 (System Forcing)]\n這是一份系統依官方產業大類「${industry}」並套用 ${mapIndustryToBenchmarkBucket(industry)} 基準公式算出的【標準 ROAS 估算】。你的論述必須**完全死守**這些數字（包含 3年總產值 ${roiRes.targetRevenue}萬、分年營收表、ROAS ${roiRes.targetROAS}倍），絕對不可自行發明其他產值數字！\n\n${formatROIAsMarkdown(roiRes)}\n`;
                     }
                 }
 
@@ -281,7 +305,7 @@ ${calculatorContext}
 2. **【防幻覺最高指導原則】嚴格區分「宏觀推估」與「客觀事實」**：
    - ⚠️ **不可妥協的紅線**：絕對不可更改或違背使用者填寫的「客觀條件」（包含：公司名稱、資本額、員工人數、補助金額、預期營收等）！使用者寫多少就是多少。資本額寫 10 就是 10 萬元，絕不准擅自改成 100 萬！如果使用者只填 1 人公司，必須用「敏捷精英團隊」來包裝，而不是捏造一個 50 人的大企業！
    - ⚠️ **禁止發明過去**：對於使用者的「過去研發經驗」、「政府補助紀錄」、「擁有專利」、「過去營收」，若使用者未提，則必須填寫「無」或「剛起步」。絕對禁止 AI 幫忙「發明」或「編造」不存在的政府計畫或客戶案例！
-   - **允許合理推估的範圍**：只有在「市場規模 (TAM/SAM)」、「市場成長率」、「產業趨勢痛點」這些「外部客觀市場知識」上，若使用者未提供，你才可以發揮顧問實力進行合理的量化推估與編寫。
+   - ⚠️ **禁止缺資料硬補**：若使用者或上傳文件未提供市場規模、成長率、產業痛點等關鍵依據，你只能保守描述「目前資料不足，需補充正式來源或數值依據」，絕對不可自行推估 TAM/SAM/SOM、成長率、競品市佔或其他量化市場數字。
 3. **快狠準呈現**：你時間寶貴，因此無需客套寒暄。請直接霸氣給出該章節完整、無懈可擊的 Markdown 內容！去吧，展現你的完美！
 
 [本章節骨架（請在此基礎上施展魔法大幅擴寫）]
@@ -572,7 +596,7 @@ aiApp.post('/project/:projectId/section/:sectionIndex/review', async (c) => {
     }
 
     // 1. Verify ownership and fetch project data (Ground Truth)
-    const project = await c.env.DB.prepare('SELECT progress_data, county FROM projects WHERE id = ? AND user_id = ?').bind(projectId, user.sub).first()
+    const project = await c.env.DB.prepare('SELECT county FROM projects WHERE id = ? AND user_id = ?').bind(projectId, user.sub).first()
     if (!project) return c.json({ error: 'Project not found' }, 404)
 
     // 2. Fetch the target section content
@@ -583,17 +607,10 @@ aiApp.post('/project/:projectId/section/:sectionIndex/review', async (c) => {
     const sectionContent = section.content as string;
 
     // 3. Extract Ground Truth
-    let groundTruth = '無原始資料';
-    if (project.progress_data) {
-        try {
-            const parsed = typeof project.progress_data === 'string' ? JSON.parse(project.progress_data) : project.progress_data;
-            if (parsed.wizardAnswers) {
-                groundTruth = JSON.stringify(parsed.wizardAnswers, null, 2);
-            }
-        } catch (e) {
-            console.error('Failed to parse progress_data:', e);
-        }
-    }
+    const answerMap = await loadProjectAnswerMap(c.env.DB, projectId)
+    const groundTruth = Object.keys(answerMap).length > 0
+        ? JSON.stringify(answerMap, null, 2)
+        : '無原始資料'
 
     // 4. Construct Prompt
     const systemPrompt = `你是一位最嚴格的政府補助案 (SBIR) 審查委員兼頂級顧問。
@@ -806,21 +823,21 @@ aiApp.post('/project/:projectId/company-verify', async (c) => {
         'SELECT question_id, answer_text FROM project_answers WHERE project_id = ?'
     ).bind(projectId).all()
 
-    const wizardAnswers: Record<string, string> = {}
+    const answerMap: Record<string, string> = {}
     if (answersRes.results) {
         for (const row of answersRes.results) {
-            wizardAnswers[row.question_id as string] = row.answer_text as string
+            answerMap[row.question_id as string] = row.answer_text as string
         }
     }
 
     console.log(`[COMPANY VERIFY DEBUG]projectId: ${projectId} `)
     console.log(`[COMPANY VERIFY DEBUG]answersRes.results length: ${answersRes.results?.length} `)
-    console.log(`[COMPANY VERIFY DEBUG] wizardAnswers keys: `, Object.keys(wizardAnswers))
-    console.log(`[COMPANY VERIFY DEBUG]company_name: `, wizardAnswers.company_name)
+    console.log(`[COMPANY VERIFY DEBUG] answerMap keys: `, Object.keys(answerMap))
+    console.log(`[COMPANY VERIFY DEBUG]company_name: `, answerMap.company_name)
 
-    const companyName = wizardAnswers.company_name || ''
-    const capitalFromWizard = wizardAnswers.capital || null
-    const sizeFromWizard = wizardAnswers.company_size || null
+    const companyName = answerMap.company_name || ''
+    const capitalFromWizard = answerMap.capital || null
+    const sizeFromWizard = answerMap.company_size || null
 
     if (!companyName) {
         return c.json({ error: '尚未在問卷中填寫公司名稱，請先至「專案資料」頁籤填寫。' }, 400)
@@ -828,7 +845,7 @@ aiApp.post('/project/:projectId/company-verify', async (c) => {
 
     let g0vData: any = null
     // 1. Try reading from cache (pre-fetched when company_name was saved)
-    const cachedG0v = wizardAnswers['g0v_company_data']
+    const cachedG0v = answerMap['g0v_company_data']
     if (cachedG0v) {
         try {
             g0vData = JSON.parse(cachedG0v)
@@ -881,7 +898,8 @@ aiApp.post('/project/:projectId/company-verify', async (c) => {
         const wizardCapitalNum = parseFloat((capitalFromWizard || '').replace(/[^\d.]/g, '')) * 10000
 
         const effectiveCapital = hasG0vCapital ? capitalNTD : wizardCapitalNum
-        const capitalOk = effectiveCapital > 0 ? effectiveCapital < 100_000_000 : true
+        const capitalKnown = effectiveCapital > 0
+        const capitalOk = capitalKnown ? effectiveCapital < 100_000_000 : false
 
         // Parse employee count from wizard answer (e.g. "只有我一人", "5人", "10")
         const sizeText = sizeFromWizard || ''
@@ -892,18 +910,23 @@ aiApp.post('/project/:projectId/company-verify', async (c) => {
         } else if (/一人|只有我|獨資|個人/.test(sizeText)) {
             employeeCount = 1
         }
-        const employeeOk = employeeCount !== null ? employeeCount < 200 : true
+        const employeeKnown = employeeCount !== null
+        const employeeOk = employeeKnown ? (employeeCount as number) < 200 : false
 
         ch2 = capitalOk && employeeOk
         const capitalDesc = hasG0vCapital
             ? `g0v資本額 ${capitalStr} 元`
-            : `問卷資本額 ${capitalFromWizard || '未填寫'}`
-        const empDesc = employeeCount !== null ? `${employeeCount} 人` : sizeText || '未填寫'
-        ch2Reason = `${capitalDesc}（${capitalOk ? '< 1億✓' : '≥ 1億✗'}），員工 ${empDesc}（${employeeOk ? '< 200✓' : '≥ 200✗'}）`
+            : capitalFromWizard
+                ? `問卷資本額 ${capitalFromWizard}`
+                : '資本額資料不足'
+        const empDesc = employeeCount !== null ? `${employeeCount} 人` : sizeText || '員工人數資料不足'
+        const capitalStatus = capitalKnown ? (capitalOk ? '< 1億✓' : '≥ 1億✗') : '資料不足'
+        const employeeStatus = employeeKnown ? (employeeOk ? '< 200✓' : '≥ 200✗') : '資料不足'
+        ch2Reason = `${capitalDesc}（${capitalStatus}），員工 ${empDesc}（${employeeStatus}）`
     }
 
     // ch_3: No obvious foreign/mainland China shareholding > 1/3
-    let ch3 = true
+    let ch3 = false
     let ch3Reason = ''
     {
         const directors: any[] = g0vCompany?.['董監事名單'] || []
@@ -914,8 +937,8 @@ aiApp.post('/project/:projectId/company-verify', async (c) => {
                 ? '董監事名單中含疑似外籍姓名，建議確認外資持股比例'
                 : '董監事名單中無明顯外籍成員，初步無外資超過 1/3 疑慮'
         } else {
-            ch3 = true
-            ch3Reason = 'g0v 無股東結構資料，建議申請前自行確認外資比例'
+            ch3 = false
+            ch3Reason = 'g0v 無股東結構資料，無法確認外資持股比例是否低於 1/3'
         }
     }
 
@@ -985,6 +1008,16 @@ aiApp.post('/project/:projectId/pitch-deck', async (c) => {
         answers[row.question_id as string] = row.answer_text as string
     }
 
+    const answerStatus = buildProjectAnswerStatusSummary(answers)
+    const missingPitchDeckQuestionIds = findMissingAnswers(answers, REQUIRED_PITCH_DECK_QUESTION_IDS)
+    if (!answerStatus.ready || missingPitchDeckQuestionIds.length > 0) {
+        return c.json({
+            error: 'PROJECT_DATA_INCOMPLETE',
+            answer_status: answerStatus,
+            missing_question_ids: missingPitchDeckQuestionIds,
+        }, 409)
+    }
+
     // Fetch completed section content (generated plan chapters)
     const sectionsRes = await c.env.DB.prepare(
         'SELECT title, content FROM project_sections WHERE project_id = ? AND status = ? ORDER BY section_index ASC'
@@ -1024,35 +1057,35 @@ aiApp.post('/project/:projectId/pitch-deck', async (c) => {
 15. 核心價值主張（結語）
 
 【專案資料】
-- 公司名稱：${answers.company_name || '未填'}
-- 產業別：${answers.industry || '未填'}
-- 代表人：${answers.project_leader || '未填'}
-- 資本額：${answers.capital || '未填'}
-- 公司規模：${answers.company_size || '未填'}
-- 問題描述：${answers.problem_description || '未填'}
-- 問題嚴重性：${answers.problem_severity || '未填'}
-- 現有解決方案的不足：${answers.current_solutions || '未填'}
-- 客戶訪談與驗證：${answers.customer_validation || '未填'}
-- 客戶痛點評分：${answers.customer_pain_score || '未填'}
-- 解決方案描述：${answers.solution_description || '未填'}
-- 創新點：${answers.innovation_points || '未填'}
-- 可量化效益：${answers.quantified_benefits || '未填'}
-- 技術進入門檻：${answers.technical_barriers || '未填'}
-- 競爭優勢：${answers.competitive_advantage || '未填'}
-- 目標市場：${answers.target_market || '未填'}
-- 市場規模：${answers.market_size || '未填'}
-- 商業模式：${answers.business_model || '未填'}
-- 第1年預估營收：${answers.expected_revenue_year1 || '未填'}
-- 第2年預估營收：${answers.expected_revenue_year2 || '未填'}
-- 第3年預估營收：${answers.expected_revenue_year3 || '未填'}
-- 營收計算邏輯：${answers.revenue_calculation_basis || '未填'}
-- 申請總金額：${answers.budget_total || '未填'}
-- 預算細項：${answers.budget_breakdown || '未填'}
-- 核心風險：${answers.key_risks || '未填'}
-- 團隊組成：${answers.team_composition || '未填'}
-- 團隊經驗：${answers.team_experience || '未填'}
-- 目前技術成熟度(TRL)：${answers.current_trl || '未填'}
-- 計畫目標TRL：${answers.target_trl || '未填'}
+- 公司名稱：${answers.company_name}
+- 產業別：${answers.industry}
+- 代表人：${answers.project_leader}
+- 資本額：${answers.capital}
+- 公司規模：${answers.company_size}
+- 問題描述：${answers.problem_description}
+- 問題嚴重性：${answers.problem_severity}
+- 現有解決方案的不足：${answers.current_solutions}
+- 客戶訪談與驗證：${answers.customer_validation}
+- 客戶痛點評分：${answers.customer_pain_score}
+- 解決方案描述：${answers.solution_description}
+- 創新點：${answers.innovation_points}
+- 可量化效益：${answers.quantified_benefits}
+- 技術進入門檻：${answers.technical_barriers}
+- 競爭優勢：${answers.competitive_advantage}
+- 目標市場：${answers.target_market}
+- 市場規模：${answers.market_size}
+- 商業模式：${answers.business_model}
+- 第1年預估營收：${answers.expected_revenue_year1}
+- 第2年預估營收：${answers.expected_revenue_year2}
+- 第3年預估營收：${answers.expected_revenue_year3}
+- 營收計算邏輯：${answers.revenue_calculation_basis}
+- 申請總金額：${answers.budget_total}
+- 預算細項：${answers.budget_breakdown}
+- 核心風險：${answers.key_risks}
+- 團隊組成：${answers.team_composition}
+- 團隊經驗：${answers.team_experience}
+- 目前技術成熟度(TRL)：${answers.current_trl}
+- 計畫目標TRL：${answers.target_trl}
 
 【已生成的計畫書章節內容（可直接引用）】
 ${sectionContents || '（尚未生成）'}

@@ -26,13 +26,27 @@
             "question": "請問您的公司主要產業是？",
             "type": "choice",
             "required": true,
+            "placeholder": "例如：行銷顧問、軟體服務、精密加工。系統會整理成官方行業統計分類大類。",
             "options": [
-                "機械",
-                "化工/材料",
-                "電子",
-                "資通訊",
-                "生技/醫療",
-                "服務業"
+                "A 農、林、漁、牧業",
+                "B 礦業及土石採取業",
+                "C 製造業",
+                "D 電力及燃氣供應業",
+                "E 用水供應及污染整治業",
+                "F 營建工程業",
+                "G 批發及零售業",
+                "H 運輸及倉儲業",
+                "I 住宿及餐飲業",
+                "J 出版影音及資通訊業",
+                "K 金融及保險業",
+                "L 不動產業",
+                "M 專業、科學及技術服務業",
+                "N 支援服務業",
+                "O 公共行政及國防；強制性社會安全",
+                "P 教育業",
+                "Q 醫療保健及社會工作服務業",
+                "R 藝術、娛樂及休閒服務業",
+                "S 其他服務業"
             ]
         },
         {
@@ -107,7 +121,7 @@
             "question": "目前市場上有哪些解決方案？它們的缺點是什麼？",
             "type": "textarea",
             "required": true,
-            "placeholder": "例如：現有的 MES 系統價格昂貴（300萬以上），且需要長時間導入...",
+            "placeholder": "可用四段簡單回答：1. 市場現在怎麼做 2. 代表方案或競品 3. 它們的缺點 4. 我們準備切入的缺口",
             "validation": {
                 "min_length": 50,
                 "max_length": 500
@@ -119,7 +133,7 @@
             "order": 9,
             "question": "您是否已經訪談過潛在客戶？訪談了幾家？",
             "type": "number",
-            "required": false,
+            "required": true,
             "validation": {
                 "min": 0,
                 "max": 100
@@ -131,7 +145,7 @@
             "order": 10,
             "question": "客戶對這個問題的痛點評分平均為？（如果有訪談）",
             "type": "scale",
-            "required": false,
+            "required": true,
             "depends_on": {
                 "question_id": "customer_validation",
                 "condition": "> 0"
@@ -229,8 +243,8 @@
             "order": 17,
             "question": "您估計的市場規模（TAM/SAM/SOM）是？（如果知道）",
             "type": "textarea",
-            "required": false,
-            "placeholder": "例如：TAM 500 億、SAM 100 億、SOM 5 億...\n如果不確定，可以跳過，我們會協助計算"
+            "required": true,
+            "placeholder": "例如：TAM 500 億、SAM 100 億、SOM 5 億...\n請提供您掌握的市場數據、估算方式或引用來源，若暫時沒有請先說明目前掌握到哪一步。"
         },
         {
             "id": "business_model",
@@ -321,6 +335,7 @@
             "question": "Phase 1 預計總經費（萬元）？",
             "type": "number",
             "required": true,
+            "placeholder": "可直接輸入數字；若目前不確定，也可以直接說不知道怎麼估。",
             "validation": {
                 "min": 10,
                 "max": 150,
@@ -347,7 +362,7 @@
             "question": "計畫結束後第 1 年，預期營收（萬元）？",
             "type": "number",
             "required": true,
-            "placeholder": "請填寫計畫結束後第 1 年的預期營收",
+            "placeholder": "可直接輸入數字；若目前不確定，也可以直接說不知道怎麼估。",
             "validation": {
                 "min": 0,
                 "max": 100000
@@ -361,7 +376,7 @@
             "question": "計畫結束後第 2 年，預期營收（萬元）？",
             "type": "number",
             "required": true,
-            "placeholder": "請填寫計畫結束後第 2 年的預期營收",
+            "placeholder": "可直接輸入數字；若目前不確定，也可以直接說不知道怎麼估。",
             "validation": {
                 "min": 0,
                 "max": 100000
@@ -374,7 +389,7 @@
             "question": "計畫結束後第 3 年，預期營收（萬元）？",
             "type": "number",
             "required": true,
-            "placeholder": "請填寫計畫結束後第 3 年的預期營收",
+            "placeholder": "可直接輸入數字；若目前不確定，也可以直接說不知道怎麼估。",
             "validation": {
                 "min": 0,
                 "max": 100000
